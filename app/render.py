@@ -31,8 +31,8 @@ STYLES = {
 Box = tuple[float, float, float, float]  # centre x, centre y, width, height; all 0..1 of the frame
 
 
-def detect_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, Box | None]]:
-    """Sample the clip and return (time_in_clip, largest face box or None)."""
+def detect_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, list[Box]]]:
+    """Sample the clip and return (time_in_clip, every face box found in that frame)."""
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     src_w, src_h = _probe_size(video)
     fw_px = 480
@@ -43,7 +43,7 @@ def detect_faces(video: Path, start: float, end: float, fps: float = 3.0) -> lis
          "-an", "-vf", f"fps={fps},scale={fw_px}:{fh_px}", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
-    samples: list[tuple[float, Box | None]] = []
+    samples: list[tuple[float, list[Box]]] = []
     frame_bytes = fw_px * fh_px
     i = 0
     try:
@@ -53,11 +53,9 @@ def detect_faces(video: Path, start: float, end: float, fps: float = 3.0) -> lis
                 break
             img = np.frombuffer(buf, dtype=np.uint8).reshape(fh_px, fw_px)
             faces = cascade.detectMultiScale(img, scaleFactor=1.15, minNeighbors=6, minSize=(24, 24))
-            if len(faces):
-                x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
-                samples.append((i / fps, ((x + fw / 2) / fw_px, (y + fh / 2) / fh_px, fw / fw_px, fh / fh_px)))
-            else:
-                samples.append((i / fps, None))
+            samples.append((i / fps, [
+                ((x + fw / 2) / fw_px, (y + fh / 2) / fh_px, fw / fw_px, fh / fh_px) for x, y, fw, fh in faces
+            ]))
             i += 1
     finally:
         proc.stdout.close()
@@ -65,10 +63,22 @@ def detect_faces(video: Path, start: float, end: float, fps: float = 3.0) -> lis
     return samples
 
 
-def track_samples(boxes: list[tuple[float, Box | None]]) -> list[tuple[float, float | None]]:
-    """Face boxes -> centre-x samples for camera_path. A face under ~7% of frame
-    width is a wide shot (stage, audience); following it gives a jumpy crop."""
-    return [(t, b[0] if b and b[2] >= 0.07 else None) for t, b in boxes]
+def _faces(entry) -> list[Box]:
+    """A frame's faces as a list, whether given as a list, a single box or None."""
+    if not entry:
+        return []
+    return [entry] if isinstance(entry[0], (int, float)) else list(entry)
+
+
+def track_samples(boxes: list[tuple[float, list[Box] | Box | None]]) -> list[tuple[float, float | None]]:
+    """Face boxes -> centre-x of the largest face per frame, for camera_path.
+    A face under ~7% of frame width is a wide shot (stage, audience);
+    following it gives a jumpy crop."""
+    out = []
+    for t, entry in boxes:
+        big = [b for b in _faces(entry) if b[2] >= 0.07]
+        out.append((t, max(big, key=lambda b: b[2] * b[3])[0] if big else None))
+    return out
 
 
 def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, float | None]]:
@@ -76,23 +86,35 @@ def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list
     return track_samples(detect_faces(video, start, end, fps))
 
 
-def facecam_from_faces(boxes: list[tuple[float, Box | None]]) -> Box | None:
+def facecam_from_faces(boxes: list[tuple[float, list[Box] | Box | None]]) -> Box | None:
     """A streamer's facecam: a small face that stays put away from the middle of
-    the frame. People look away from the camera a lot, so a face in a quarter of
-    the samples is enough. Returns the median box, or None for anything else
-    (talking heads, moving people, rare detections)."""
-    seen = [b for _, b in boxes if b]
+    the frame. Every face in every frame is a candidate, so a bigger face in the
+    content (a game character, a video being reacted to) can't hide it. People
+    look away from the camera a lot, so a face in a quarter of the frames is
+    enough. Returns the median box, or None for anything else (talking heads,
+    moving people, rare detections)."""
+    # small, off-centre faces only; a big or centred face is the main subject
+    cands = [(i, b) for i, (_, entry) in enumerate(boxes) for b in _faces(entry)
+             if b[2] <= 0.22 and not 0.3 <= b[0] <= 0.7]
+    if not cands:
+        return None
+
+    def near(a: Box, b: Box, r: float) -> bool:
+        return abs(a[0] - b[0]) <= r and abs(a[1] - b[1]) <= r
+
+    # the spot where a face shows up most often...
+    anchor = max((b for _, b in cands), key=lambda a: len({i for i, b in cands if near(a, b, 0.06)}))
+    # ...and the one face per frame that sits there
+    spot: dict[int, Box] = {}
+    for i, b in cands:
+        if near(anchor, b, 0.08) and i not in spot:
+            spot[i] = b
+    seen = list(spot.values())
     if len(seen) < max(3, 0.25 * len(boxes)):
         return None
-    med = tuple(statistics.median(b[k] for b in seen) for k in range(4))
-    cx, cy, w, _ = med
     if statistics.pstdev([b[0] for b in seen]) > 0.06 or statistics.pstdev([b[1] for b in seen]) > 0.06:
         return None  # it moves around: a person in the scene, not a fixed camera overlay
-    if w > 0.22:
-        return None  # a big face is the main subject; "fill" tracks it better
-    if 0.3 <= cx <= 0.7:
-        return None  # centred: a talking head, not an overlay in a corner
-    return med
+    return tuple(statistics.median(b[k] for b in seen) for k in range(4))
 
 
 def _even(v: float) -> int:
@@ -101,9 +123,10 @@ def _even(v: float) -> int:
 
 def split_layout(
     src_w: int, src_h: int, cam: Box, out_w: int, out_h: int, cam_share: float = 0.4
-) -> dict:
+) -> dict | None:
     """Crops for a stacked frame: facecam on top (cam_share of the height),
-    gameplay below. Each crop has its panel's shape, so nothing is stretched."""
+    gameplay below. Each crop has its panel's shape, so nothing is stretched.
+    None when no gameplay crop can leave the facecam out (it would show twice)."""
     top_h = _even(out_h * cam_share)
     bottom_h = out_h - top_h
     cx, cy, fw, fh = cam
@@ -131,6 +154,8 @@ def split_layout(
     elif cx >= 0.5 and gx + gw > face_left:
         gx = max(0, face_left - gw)
     gy = (src_h - gh) / 2
+    if gx < (cx + fw / 2) * src_w and gx + gw > (cx - fw / 2) * src_w:
+        return None  # the face itself would still be in the gameplay panel
 
     def rect(x, y, w, h):  # even sizes and offsets (yuv420p), kept inside the frame
         w, h = _even(min(w, src_w)), _even(min(h, src_h))
@@ -317,8 +342,8 @@ def render_clip(
         boxes = detect_faces(video, start, end) if facecam is None else []
         if layout in ("auto", "split") and tall:
             cam = facecam or facecam_from_faces(boxes)
-            if cam:
-                split = split_layout(src_w, src_h, cam, W, H)
+            split = split_layout(src_w, src_h, cam, W, H) if cam else None
+            if split:
                 used = "split"
         if split is None:
             if layout == "split":
