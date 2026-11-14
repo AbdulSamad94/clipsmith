@@ -42,6 +42,11 @@ def test_upload_carries_prompt_and_time_range(client):
     assert job["options"]["start_time"] == 60 and job["options"]["end_time"] == 600
 
 
+def test_upload_carries_aspect(client):
+    assert _upload(client, aspect="1:1").json()["options"]["aspect"] == "1:1"
+    assert _upload(client, aspect="4:5").status_code == 400
+
+
 def test_upload_rejects_backwards_time_range(client):
     res = _upload(client, start_time="600", end_time="60")
     assert res.status_code == 400 and "'To' time" in res.json()["detail"]

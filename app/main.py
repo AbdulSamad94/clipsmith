@@ -44,6 +44,7 @@ class JobRequest(BaseModel):
     prompt: str = Field(default="", max_length=300)
     start_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     end_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    aspect: str = "9:16"
 
 
 def _job_dir(job_id: str) -> Path:
@@ -137,7 +138,7 @@ def _run(job_id: str, req: JobRequest) -> None:
             name = f"clip_{i + 1:02d}"
             info = render.render_clip(
                 src.video_path, src.words, start, end, workdir, name,
-                style=req.style, layout=req.layout, hook=clip.hook if req.hook else None,
+                style=req.style, layout=req.layout, hook=clip.hook if req.hook else None, aspect=req.aspect,
             )
             done.append(
                 asdict(clip)
@@ -148,6 +149,7 @@ def _run(job_id: str, req: JobRequest) -> None:
                     "video": f"/media/{job_id}/{name}.mp4",
                     "thumb": f"/media/{job_id}/{name}.jpg",
                     "layout": info["layout"],
+                    "aspect": req.aspect,
                 }
             )
             _update(job_id, clips=list(done))
@@ -185,6 +187,8 @@ def _check_options(req: JobRequest) -> None:
         raise HTTPException(400, "Unknown layout.")
     if req.start_time is not None and req.end_time is not None and req.end_time <= req.start_time:
         raise HTTPException(400, "The 'To' time must be after the 'From' time.")
+    if req.aspect not in render.ASPECTS:
+        raise HTTPException(400, "Unknown aspect ratio.")
 
 
 def _new_job(req: JobRequest, job_id: str | None = None, **extra) -> dict:
@@ -225,6 +229,7 @@ async def upload_job(
     prompt: str = Form(""),
     start_time: float | None = Form(None),
     end_time: float | None = Form(None),
+    aspect: str = Form("9:16"),
 ) -> dict:
     name = Path(file.filename or "").name
     ext = Path(name).suffix.lower()
@@ -233,7 +238,7 @@ async def upload_job(
     try:
         req = JobRequest(url="", clip_count=clip_count, min_len=min_len, max_len=max_len,
                          style=style, layout=layout, hook=hook,
-                         prompt=prompt, start_time=start_time, end_time=end_time)
+                         prompt=prompt, start_time=start_time, end_time=end_time, aspect=aspect)
     except ValidationError as exc:
         raise HTTPException(422, str(exc)) from None
     _check_options(req)
