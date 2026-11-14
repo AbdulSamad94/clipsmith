@@ -3,8 +3,10 @@ background, and serves progress and finished clips to the page."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 import traceback
@@ -18,6 +20,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
+from starlette.background import BackgroundTask
 
 from . import config, render, selector, source
 
@@ -191,6 +194,7 @@ def create_job(req: JobRequest) -> dict:
 
 
 _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
+_MAX_UPLOAD_BYTES = 8 * 1024**3
 
 
 @app.post("/api/jobs/upload")
@@ -216,11 +220,15 @@ async def upload_job(
     job_id = uuid.uuid4().hex[:10]
     d = _job_dir(job_id)
     d.mkdir(parents=True, exist_ok=True)
+    size = 0
     try:
         with open(d / f"source{ext}", "wb") as out:
             while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, f"File is too large (limit {_MAX_UPLOAD_BYTES // 1024**3} GB).")
                 out.write(chunk)
-    except Exception:
+    except BaseException:  # includes a cancelled/interrupted upload
         shutil.rmtree(d, ignore_errors=True)
         raise
     return _new_job(req, job_id, upload=name)
@@ -237,14 +245,20 @@ def download_zip(job_id: str) -> FileResponse:
     files = [f for f in files if f.is_file()]
     if not files:
         raise HTTPException(409, "This video has no finished clips yet.")
-    zpath = d / "clips.zip"
-    tmp = d / "clips.zip.tmp"
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
-        for f in files:
-            z.write(f, f.name)
-    tmp.replace(zpath)
+    # Build in a throwaway file (outside the served /media tree) and delete it once sent,
+    # so a download doesn't leave a second copy of every clip on disk.
+    fd, tmp = tempfile.mkstemp(suffix=".zip", dir=config.DATA_DIR)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+            for f in files:
+                z.write(f, f.name)
+    except BaseException:
+        os.unlink(tmp)
+        raise
     title = re.sub(r'[\\/:*?"<>|]+', "", job.get("title") or "clips").strip()[:80] or "clips"
-    return FileResponse(zpath, media_type="application/zip", filename=f"{title}.zip")
+    return FileResponse(tmp, media_type="application/zip", filename=f"{title}.zip",
+                        background=BackgroundTask(os.unlink, tmp))
 
 
 @app.get("/api/jobs")
