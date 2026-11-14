@@ -137,6 +137,9 @@ def test_prompt_cannot_forge_closing_tag():
     assert p.lower().count("</user_request>") == 1 and p.count("<user_request>") == 1
 
 
-def test_infinite_time_is_invalid(client):
-    assert client.post("/api/jobs", content='{"url": "%s", "start_time": 1e400}' % YT,
-                       headers={"content-type": "application/json"}).status_code == 422
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_non_finite_time_is_invalid(bad):
+    with pytest.raises(ValueError):
+        main.JobRequest(url=YT, start_time=bad)
+    with pytest.raises(ValueError):
+        main.JobRequest(url=YT, end_time=bad)
