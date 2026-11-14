@@ -17,7 +17,7 @@ Paste a YouTube link. Clipsmith finds the best 30–60 second moments, crops the
 
 > Not affiliated with OpusClip. "OpusClip" is mentioned only to describe what this project is an alternative to.
 
-![Clipsmith screenshot](docs/screenshot.png)
+![Clipsmith screenshot](docs/ss.png)
 
 ## Clipsmith vs OpusClip
 
