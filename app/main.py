@@ -86,6 +86,22 @@ def _clock(t: float) -> str:
     return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def friendly_error(exc: BaseException) -> str:
+    """Turn a pipeline exception (often raw yt-dlp output) into a message for the page."""
+    text = _ANSI.sub("", str(exc)).strip()
+    text = re.sub(r"^ERROR:\s*", "", text)
+    low = text.lower()
+    if "getaddrinfo" in low or "failed to resolve" in low or "connection refused" in low or "timed out" in low:
+        return "Couldn't reach YouTube. Check your internet connection and try again."
+    if "429" in low or "too many requests" in low:
+        return "YouTube is limiting requests from your connection right now. Wait a few minutes and try again."
+    text = re.sub(r"^\[\w+\]\s*[\w-]+:\s*", "", text)  # drop yt-dlp's "[youtube] <id>: " prefix
+    return text or type(exc).__name__
+
+
 def _render_bounds(
     clip_start: float,
     clip_end: float,
@@ -181,8 +197,7 @@ def _run(job_id: str, req: JobRequest) -> None:
         _update(job_id, status="done", progress=100, message="Done")
     except Exception as exc:
         traceback.print_exc()
-        msg = str(exc).replace("ERROR: ", "").strip() or type(exc).__name__
-        _update(job_id, status="error", error=msg[:500])
+        _update(job_id, status="error", error=friendly_error(exc)[:500])
 
 
 @app.get("/api/status")
