@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipsmith — YouTube to Shorts</title>
+<style>
+  :root {
+    --bg: #0d0e12; --panel: #16181f; --panel-2: #1d2029; --line: #2a2e3a;
+    --text: #eef0f5; --muted: #9aa1b2; --accent: #ffd60a; --accent-ink: #1a1500;
+    --good: #4ade80; --mid: #fbbf24; --low: #94a3b8; --bad: #f87171;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px 80px; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 19px; letter-spacing: -.01em; }
+  .brand i { width: 26px; height: 26px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; }
+  .brand i::after { content: ""; border-left: 9px solid var(--accent-ink); border-top: 6px solid transparent; border-bottom: 6px solid transparent; margin-left: 2px; }
+  .mode { font-size: 12.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
+  .mode b { color: var(--text); font-weight: 600; }
+  .mode .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--low); }
+  .mode.ai .dot { background: var(--good); }
+
+  .hero { text-align: center; padding: 34px 0 26px; }
+  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.1; margin: 0 0 12px; letter-spacing: -.03em; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .hero p { color: var(--muted); margin: 0 auto; max-width: 560px; font-size: 16px; }
+
+  form { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 16px; max-width: 820px; margin: 26px auto 0; }
+  .row { display: flex; gap: 10px; }
+  input[type=url] { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    border-radius: 11px; padding: 14px 16px; font-size: 16px; outline: none; }
+  input[type=url]:focus { border-color: var(--accent); }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 11px; }
+  .go { background: var(--accent); color: var(--accent-ink); font-weight: 700; padding: 0 24px; font-size: 16px; white-space: nowrap; }
+  .go:disabled { opacity: .5; cursor: default; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+  .opts label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; font: inherit; }
+  .check { display: flex; align-items: center; gap: 8px; padding-top: 22px; color: var(--text); font-size: 14px; }
+  .check input { width: 17px; height: 17px; accent-color: var(--accent); }
+  .formerr { color: var(--bad); margin: 10px 2px 0; font-size: 14px; min-height: 1px; }
+
+  section.job { margin-top: 42px; }
+  .jobhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .jobhead h2 { font-size: 18px; margin: 0 0 3px; letter-spacing: -.01em; }
+  .jobhead .sub { color: var(--muted); font-size: 13px; }
+  .ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; }
+  .ghost:hover { color: var(--text); border-color: var(--muted); }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .5s ease; }
+  .status { color: var(--muted); font-size: 14px; margin-top: 8px; }
+  .note { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 10px 14px; font-size: 13.5px; color: var(--muted); margin-bottom: 14px; }
+  .note.err { border-color: #5b2a2a; color: #fca5a5; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; margin-top: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+  .vid { position: relative; aspect-ratio: 9/16; background: #000; }
+  .vid video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .score { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,.72); backdrop-filter: blur(6px);
+    border-radius: 9px; padding: 4px 9px; font-weight: 800; font-size: 15px; display: flex; align-items: baseline; gap: 4px; }
+  .score small { font-weight: 500; font-size: 10.5px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+  .len { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.72); border-radius: 9px; padding: 4px 8px; font-size: 12.5px; }
+  .body { padding: 13px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .body h3 { margin: 0; font-size: 15px; line-height: 1.3; }
+  .body p { margin: 0; color: var(--muted); font-size: 13px; }
+  .tags { color: #7dd3fc; font-size: 12.5px; }
+  .actions { display: flex; gap: 8px; margin-top: auto; padding-top: 6px; }
+  .actions a, .actions button { flex: 1; text-align: center; text-decoration: none; border-radius: 9px; padding: 9px 0; font-size: 13.5px; font-weight: 600; }
+  .dl { background: var(--accent); color: var(--accent-ink); }
+  .cp { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .empty { text-align: center; color: var(--muted); margin-top: 60px; font-size: 14px; }
+  @media (max-width: 560px) { .row { flex-direction: column; } .go { padding: 13px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><i></i>Clipsmith</div>
+    <div class="mode" id="mode"><span class="dot"></span>Checking…</div>
+  </header>
+
+  <div class="hero">
+    <h1>One long video in.<br><em>A batch of Shorts</em> out.</h1>
+    <p>Paste a YouTube link. The best one-minute moments come back cut, reframed to vertical and captioned, ranked by how likely they are to hold a viewer.</p>
+  </div>
+
+  <form id="form">
+    <div class="row">
+      <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…" required autocomplete="off">
+      <button class="go" id="go" type="submit">Get clips</button>
+    </div>
+    <div class="opts">
+      <div><label for="count">Number of clips</label>
+        <select id="count"><option>3</option><option selected>5</option><option>8</option><option>10</option></select></div>
+      <div><label for="len">Clip length</label>
+        <select id="len">
+          <option value="15-30">15–30 seconds</option>
+          <option value="30-60" selected>30–60 seconds</option>
+          <option value="45-60">45–60 seconds</option>
+          <option value="60-90">60–90 seconds</option>
+        </select></div>
+      <div><label for="style">Captions</label><select id="style"></select></div>
+      <div><label for="layout">Framing</label>
+        <select id="layout">
+          <option value="auto" selected>Auto</option>
+          <option value="fill">Fill, follow the speaker</option>
+          <option value="fit">Fit, blurred background</option>
+        </select></div>
+      <label class="check"><input type="checkbox" id="hook" checked>Hook text at the start</label>
+    </div>
+    <div class="formerr" id="formerr"></div>
+  </form>
+
+  <div id="jobs"></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const jobsEl = $("#jobs");
+let jobs = [];
+let timer = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+
+async function init() {
+  try {
+    const st = await api("/api/status");
+    const mode = $("#mode");
+    mode.classList.toggle("ai", !!st.ai);
+    mode.innerHTML = st.ai
+      ? `<span class="dot"></span>Moment picking: <b>AI</b> · ${esc(st.model)}`
+      : `<span class="dot"></span>Moment picking: <b>Basic</b> · no AI configured`;
+    if (st.missing && st.missing.length) {
+      $("#formerr").textContent = `Missing on this computer: ${st.missing.join(", ")}. Install ffmpeg and restart (see README).`;
+    }
+    $("#style").innerHTML = Object.entries(st.styles).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+  } catch (e) { $("#mode").textContent = "Server not reachable"; }
+  await refresh();
+}
+
+async function refresh() {
+  try { jobs = await api("/api/jobs"); } catch { return; }
+  render();
+  const active = jobs.some((j) => j.status === "queued" || j.status === "running");
+  clearTimeout(timer);
+  if (active) timer = setTimeout(refresh, 1500);
+  $("#go").disabled = active;
+  $("#go").textContent = active ? "Working…" : "Get clips";
+}
+
+const scoreColor = (s) => (s >= 85 ? "var(--good)" : s >= 70 ? "var(--mid)" : "var(--low)");
+
+function clipCard(c) {
+  const tags = (c.hashtags || []).map((h) => "#" + h).join(" ");
+  const copyText = [c.title, c.description, tags].filter(Boolean).join("\n\n");
+  return `<div class="card">
+    <div class="vid">
+      <video src="${esc(c.video)}" poster="${esc(c.thumb)}" controls preload="none" playsinline></video>
+      <div class="score" style="color:${scoreColor(c.score)}">${c.score}<small>score</small></div>
+      <div class="len">${Math.round(c.length)}s</div>
+    </div>
+    <div class="body">
+      <h3>${esc(c.title)}</h3>
+      <p>${esc(c.reason)}</p>
+      ${tags ? `<div class="tags">${esc(tags)}</div>` : ""}
+      <div class="actions">
+        <a class="dl" href="${esc(c.video)}" download="${esc((c.title || "clip").replace(/[\\/:*?"<>|]+/g, "").slice(0, 60))}.mp4">Download</a>
+        <button class="cp" data-copy="${esc(copyText)}">Copy caption</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function jobBlock(j) {
+  const busy = j.status === "queued" || j.status === "running";
+  const sub = [
+    j.clips.length ? `${j.clips.length} clip${j.clips.length > 1 ? "s" : ""}` : "",
+    j.selection === "ollama" ? "picked by local AI" : j.selection === "claude" || j.selection === "gemini" ? "picked by AI" : j.selection === "basic" ? "picked by basic scoring" : "",
+    j.transcript_source === "whisper" ? "transcribed from audio" : "",
+  ].filter(Boolean).join(" · ");
+  return `<section class="job">
+    <div class="jobhead">
+      <div><h2>${esc(j.title || j.url)}</h2><div class="sub">${esc(sub)}</div></div>
+      ${busy ? "" : `<button class="ghost" data-del="${esc(j.id)}">Remove</button>`}
+    </div>
+    ${busy ? `<div class="bar"><div style="width:${j.progress}%"></div></div><div class="status">${esc(j.message)} · ${Math.round(j.progress)}%</div>` : ""}
+    ${j.status === "error" ? `<div class="note err">${esc(j.error)}</div>` : ""}
+    ${j.warning ? `<div class="note">${esc(j.warning)}</div>` : ""}
+    ${j.clips.length ? `<div class="grid">${j.clips.map(clipCard).join("")}</div>` : ""}
+  </section>`;
+}
+
+function render() {
+  // Don't rebuild a finished job's cards on every poll: it would restart any video that's playing.
+  const sig = JSON.stringify(jobs.map((j) => [j.id, j.status, j.progress, j.message, j.clips.length, j.warning]));
+  if (sig === render.last) return;
+  const structural = JSON.stringify(jobs.map((j) => [j.id, j.status, j.clips.length, j.warning]));
+  if (structural === render.lastStructural) {
+    for (const j of jobs) {
+      const sec = jobsEl.querySelector(`[data-job="${j.id}"]`);
+      if (!sec) continue;
+      const bar = sec.querySelector(".bar > div"), st = sec.querySelector(".status");
+      if (bar) bar.style.width = j.progress + "%";
+      if (st) st.textContent = `${j.message} · ${Math.round(j.progress)}%`;
+    }
+  } else {
+    jobsEl.innerHTML = jobs.length
+      ? jobs.map((j) => jobBlock(j).replace('<section class="job">', `<section class="job" data-job="${j.id}">`)).join("")
+      : `<div class="empty">Your clips will show up here.</div>`;
+  }
+  render.last = sig;
+  render.lastStructural = structural;
+}
+
+$("#form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#formerr").textContent = "";
+  const [min_len, max_len] = $("#len").value.split("-").map(Number);
+  try {
+    await api("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: $("#url").value.trim(), clip_count: +$("#count").value, min_len, max_len,
+        style: $("#style").value, layout: $("#layout").value, hook: $("#hook").checked,
+      }),
+    });
+    $("#url").value = "";
+    await refresh();
+  } catch (err) { $("#formerr").textContent = err.message; }
+});
+
+jobsEl.addEventListener("click", async (e) => {
+  const cp = e.target.closest("[data-copy]");
+  if (cp) {
+    await navigator.clipboard.writeText(cp.dataset.copy).catch(() => {});
+    const old = cp.textContent; cp.textContent = "Copied"; setTimeout(() => (cp.textContent = old), 1200);
+    return;
+  }
+  const del = e.target.closest("[data-del]");
+  if (del && confirm("Remove this video and delete its clips?")) {
+    await api(`/api/jobs/${del.dataset.del}`, { method: "DELETE" }).catch((err) => alert(err.message));
+    await refresh();
+  }
+});
+
+init();
+</script>
+</body>
+</html>

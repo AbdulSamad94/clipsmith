@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+yt-dlp
+anthropic
+google-genai
+requests
+opencv-python-headless<5
+numpy
+python-dotenv
+faster-whisper
