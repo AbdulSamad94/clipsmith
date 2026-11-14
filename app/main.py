@@ -86,6 +86,30 @@ def _clock(t: float) -> str:
     return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
 
 
+def _render_bounds(
+    clip_start: float,
+    clip_end: float,
+    words: list,
+    duration: float | None,
+    range_start: float | None = None,
+    range_end: float | None = None,
+) -> tuple[float, float]:
+    """Pad a clip slightly so its first word isn't cut and the moment can land:
+    run on into the pause after the last word (a laugh, a reaction, engine
+    noise), never past the video or outside a requested From/To range."""
+    start = max(0.0, clip_start - 0.15)
+    next_word = next((w.start for w in words if w.start >= clip_end - 0.05), None)
+    tail = 1.5 if next_word is None else max(0.3, min(1.5, next_word - clip_end - 0.1))
+    end = clip_end + tail
+    if duration:
+        end = min(end, duration)
+    if range_start is not None:
+        start = max(start, range_start)
+    if range_end is not None:
+        end = min(end, range_end)
+    return round(start, 3), round(end, 3)
+
+
 def _run(job_id: str, req: JobRequest) -> None:
     workdir = _job_dir(job_id)
 
@@ -129,12 +153,9 @@ def _run(job_id: str, req: JobRequest) -> None:
         done: list[dict] = []
         for i, clip in enumerate(clips):
             progress(45 + 54 * i / len(clips), f"Rendering clip {i + 1} of {len(clips)}")
-            # Let the moment land: run on into the pause after the last word
-            # (a laugh, a reaction, engine noise) instead of cutting right after it.
-            start = max(0.0, clip.start - 0.15)
-            next_word = next((w.start for w in src.words if w.start >= clip.end - 0.05), None)
-            tail = 1.5 if next_word is None else max(0.3, min(1.5, next_word - clip.end - 0.1))
-            end = min(src.duration or clip.end + tail, clip.end + tail)
+            start, end = _render_bounds(
+                clip.start, clip.end, src.words, src.duration, req.start_time, req.end_time
+            )
             name = f"clip_{i + 1:02d}"
             info = render.render_clip(
                 src.video_path, src.words, start, end, workdir, name,
