@@ -44,7 +44,7 @@ ollama pull qwen3.5:4b
 ### 3. Set up Clipsmith
 
 ```
-git clone https://github.com/<your-username>/clipsmith.git
+git clone https://github.com/AbdulSamad94/clipsmith.git
 cd clipsmith
 ```
 
