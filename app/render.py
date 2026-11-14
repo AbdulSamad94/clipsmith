@@ -14,6 +14,10 @@ from .source import Word
 
 W, H = config.OUT_W, config.OUT_H
 
+# Output sizes per aspect ratio; 9:16 is the default (Shorts / TikTok / Reels).
+ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080)}
+DEFAULT_ASPECT = "9:16"
+
 # ASS colours are &HBBGGRR&
 STYLES = {
     "yellow": {"label": "Bold Yellow", "font": "Arial Black", "size": 92, "active": "&H00F6FF&", "upper": True},
@@ -86,6 +90,12 @@ def camera_path(samples: list[tuple[float, float | None]], deadzone: float = 0.0
     return keys[:60]
 
 
+def crop_width(src_w: int, src_h: int, out_w: int, out_h: int) -> int:
+    """Width of the full-height source crop that matches the output ratio,
+    rounded to even and clamped to the source width."""
+    return min(int(src_h * out_w / out_h) // 2 * 2, src_w)
+
+
 def _crop_x_expr(keys: list[tuple[float, float]], src_w: int, crop_w: int) -> str:
     def px(cx: float) -> int:
         return int(max(0, min(src_w - crop_w, cx * src_w - crop_w / 2)))
@@ -126,19 +136,29 @@ def _groups(words: list[Word], max_words: int = 3, max_chars: int = 18) -> list[
     return groups
 
 
-def build_ass(words: list[Word], clip_start: float, clip_len: float, style_key: str, hook: str | None) -> str:
+def build_ass(
+    words: list[Word], clip_start: float, clip_len: float, style_key: str, hook: str | None,
+    size: tuple[int, int] = (W, H),
+) -> str:
     st = STYLES.get(style_key, STYLES["yellow"])
+    w, h = size
+    # Margins are proportional to the frame (they reproduce the 9:16 values exactly);
+    # in square/landscape frames the text is a little smaller so lines still fit.
+    k = min(w, h) / 1080 * (1.0 if h > w else 0.85)
+    cap_size, hook_size = round(st["size"] * k), round(64 * k)
+    cap_lr, cap_v = round(w * 0.065), round(h * 0.245)
+    hook_lr, hook_v = round(w * 0.0834), round(h * 0.12)
     head = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {W}
-PlayResY: {H}
+PlayResX: {w}
+PlayResY: {h}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{st['font']},{st['size']},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,7,3,2,70,70,470,1
-Style: Hook,Arial Black,64,&H00101010,&H00101010,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,90,90,230,1
+Style: Cap,{st['font']},{cap_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,7,3,2,{cap_lr},{cap_lr},{cap_v},1
+Style: Hook,Arial Black,{hook_size},&H00101010,&H00101010,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,{hook_lr},{hook_lr},{hook_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -192,16 +212,23 @@ def render_clip(
     style: str = "yellow",
     layout: str = "auto",
     hook: str | None = None,
+    aspect: str = DEFAULT_ASPECT,
 ) -> dict:
     """Writes <name>.mp4 and <name>.jpg into out_dir. Returns what layout was used."""
     clip_len = end - start
+    W, H = ASPECTS.get(aspect, ASPECTS[DEFAULT_ASPECT])
     clip_words = [w for w in words if w.end > start and w.start < end]
     ass_name = f"{name}.ass"
-    (out_dir / ass_name).write_text(build_ass(clip_words, start, clip_len, style, hook), encoding="utf-8")
+    (out_dir / ass_name).write_text(build_ass(clip_words, start, clip_len, style, hook, size=(W, H)), encoding="utf-8")
 
     src_w, src_h = _probe_size(video)
-    vertical_already = src_w / src_h <= 0.6
+    src_r, out_r = src_w / src_h, W / H
+    # Source already (close to) the target shape: just scale and trim the edges.
+    # For 9:16 anything at or narrower than 0.6 qualifies, as before.
+    vertical_already = src_r <= 0.6 if out_r < 0.6 else abs(src_r / out_r - 1) <= 0.07
     used = layout
+    if src_r < out_r and not vertical_already:
+        used = layout = "fit"  # source narrower than the output: a side crop can't fill it
     keys = None
     if layout in ("auto", "fill") and not vertical_already:
         keys = camera_path(track_faces(video, start, end))
@@ -214,14 +241,15 @@ def render_clip(
         used = "source"
         graph = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},ass={ass_name}[v]"
     elif used == "fill":
-        crop_w = int(src_h * 9 / 16) // 2 * 2
+        crop_w = crop_width(src_w, src_h, W, H)
         x = _crop_x_expr(keys, src_w, crop_w)
         graph = f"[0:v]crop={crop_w}:{src_h}:x='{x}':y=0,scale={W}:{H}:flags=lanczos,ass={ass_name}[v]"
     else:  # fit: whole frame over a blurred copy of itself
+        fg = f"{W}:-2" if src_r >= out_r else f"-2:{H}"  # fit the limiting side
         graph = (
             f"[0:v]split[a][b];"
             f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=24:4,eq=brightness=-0.12[bg];"
-            f"[b]scale={W}:-2:flags=lanczos[fg];"
+            f"[b]scale={fg}:flags=lanczos[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,ass={ass_name}[v]"
         )
 
