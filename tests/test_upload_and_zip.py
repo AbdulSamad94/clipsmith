@@ -2,6 +2,7 @@ import io
 import shutil
 import subprocess
 import zipfile
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,7 +66,7 @@ def test_zip_contains_all_clips(client):
     job_id = _finished_job(client)
     res = client.get(f"/api/jobs/{job_id}/zip")
     assert res.status_code == 200
-    assert "Great Talk" in res.headers["content-disposition"]
+    assert "Great Talk Part 1.zip" in unquote(res.headers["content-disposition"])
     with zipfile.ZipFile(io.BytesIO(res.content)) as z:
         assert sorted(z.namelist()) == ["clip_01.mp4", "clip_02.mp4"]
         assert z.read("clip_02.mp4") == b"video 1"

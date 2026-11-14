@@ -42,6 +42,8 @@
   select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; font: inherit; }
   .check { display: flex; align-items: center; gap: 8px; padding-top: 22px; color: var(--text); font-size: 14px; }
   .check input { width: 17px; height: 17px; accent-color: var(--accent); }
+  .upl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+  .upl input { color: var(--muted); font: inherit; max-width: 100%; }
   .formerr { color: var(--bad); margin: 10px 2px 0; font-size: 14px; min-height: 1px; }
 
   section.job { margin-top: 42px; }
@@ -49,6 +51,7 @@
   .jobhead h2 { font-size: 18px; margin: 0 0 3px; letter-spacing: -.01em; }
   .jobhead .sub { color: var(--muted); font-size: 13px; }
   .ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; }
+  a.ghost { display: inline-block; border-radius: 11px; text-decoration: none; white-space: nowrap; }
   .ghost:hover { color: var(--text); border-color: var(--muted); }
   .bar { height: 8px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
   .bar > div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .5s ease; }
@@ -93,6 +96,8 @@
       <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…" required autocomplete="off">
       <button class="go" id="go" type="submit">Get clips</button>
     </div>
+    <div class="upl"><label for="file">or upload a video file</label>
+      <input type="file" id="file" accept=".mp4,.mov,.mkv,.webm,video/*"></div>
     <div class="opts">
       <div><label for="count">Number of clips</label>
         <select id="count"><option>3</option><option selected>5</option><option>8</option><option>10</option></select></div>
@@ -190,8 +195,8 @@ function jobBlock(j) {
   ].filter(Boolean).join(" · ");
   return `<section class="job">
     <div class="jobhead">
-      <div><h2>${esc(j.title || j.url)}</h2><div class="sub">${esc(sub)}</div></div>
-      ${busy ? "" : `<button class="ghost" data-del="${esc(j.id)}">Remove</button>`}
+      <div><h2>${esc(j.title || j.upload || j.url)}</h2><div class="sub">${esc(sub)}</div></div>
+      ${busy ? "" : `<div>${j.status === "done" && j.clips.length ? `<a class="ghost" href="/api/jobs/${esc(j.id)}/zip" download>Download all</a> ` : ""}<button class="ghost" data-del="${esc(j.id)}">Remove</button></div>`}
     </div>
     ${busy ? `<div class="bar"><div style="width:${j.progress}%"></div></div><div class="status">${esc(j.message)} · ${Math.round(j.progress)}%</div>` : ""}
     ${j.status === "error" ? `<div class="note err">${esc(j.error)}</div>` : ""}
@@ -226,7 +231,35 @@ $("#form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#formerr").textContent = "";
   const [min_len, max_len] = $("#len").value.split("-").map(Number);
+  const file = $("#file").files[0];
   try {
+    if (file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      for (const [k, v] of Object.entries({
+        clip_count: $("#count").value, min_len, max_len,
+        style: $("#style").value, layout: $("#layout").value, hook: $("#hook").checked,
+      })) fd.append(k, v);
+      $("#go").disabled = true;
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/jobs/upload");
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) $("#go").textContent = `Uploading ${Math.round(100 * ev.loaded / ev.total)}%`;
+        };
+        xhr.onload = () => {
+          let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+          if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+          else reject(new Error(typeof data.detail === "string" ? data.detail : `Upload failed (${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error("Upload failed. Is the app still running?"));
+        xhr.send(fd);
+      }).finally(() => { $("#go").disabled = false; $("#go").textContent = "Get clips"; });
+      $("#file").value = "";
+      $("#url").required = true;
+      await refresh();
+      return;
+    }
     await api("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -239,6 +272,8 @@ $("#form").addEventListener("submit", async (e) => {
     await refresh();
   } catch (err) { $("#formerr").textContent = err.message; }
 });
+
+$("#file").addEventListener("change", () => { $("#url").required = !$("#file").files.length; });
 
 jobsEl.addEventListener("click", async (e) => {
   const cp = e.target.closest("[data-copy]");
