@@ -53,6 +53,26 @@ def test_track_samples_from_boxes_keep_the_size_filter():
     assert render.track_samples(boxes) == [(0.0, 0.5), (0.3, None), (0.6, None)]
 
 
+def test_track_samples_follow_the_largest_of_several_faces():
+    frame = [(0.2, 0.7, 0.10, 0.2), (0.6, 0.4, 0.25, 0.4)]
+    assert render.track_samples([(0.0, frame), (0.3, [])]) == [(0.0, 0.6), (0.3, None)]
+
+
+def test_facecam_found_even_when_a_bigger_face_is_on_screen():
+    """Reaction/gameplay streams: a big face in the content (a character, a
+    video being watched) moves around while the small facecam stays put."""
+    rnd = random.Random(7)
+    frames = []
+    for i in range(90):
+        faces = [(rnd.uniform(0.35, 0.8), rnd.uniform(0.2, 0.6), 0.25, 0.4)]  # big, wandering
+        if rnd.random() < 0.5:
+            faces.append((0.153 + rnd.uniform(-0.01, 0.01), 0.676 + rnd.uniform(-0.01, 0.01), 0.123, 0.219))
+        frames.append((i / 3, faces))
+    cam = render.facecam_from_faces(frames)
+    assert cam is not None
+    assert abs(cam[0] - 0.153) < 0.02 and abs(cam[1] - 0.676) < 0.02
+
+
 # ---------- split geometry ----------
 
 def _check_rect(rect, src_w, src_h):
@@ -85,6 +105,20 @@ def test_split_geometry_with_facecam_on_the_right():
     _check_rect(g["cam"], 1920, 1080)
     gx, _, gw, _ = g["game"]
     assert gx + gw <= 0.85 * 1920  # gameplay ends before the facecam
+
+
+def test_no_split_when_gameplay_crop_cannot_avoid_the_facecam():
+    # 4:3 source, facecam too far inward: any gameplay crop would show it again
+    assert render.split_layout(1440, 1080, (0.29, 0.5, 0.2, 0.3), 1080, 1920) is None
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="needs ffmpeg")
+def test_render_falls_back_when_split_is_impossible(tmp_path):
+    src = tmp_path / "narrow.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=960x720:rate=30",
+                    "-c:v", "libx264", "-preset", "ultrafast", str(src)], check=True)
+    info = render.render_clip(src, [], 0, 2, tmp_path, "clip", layout="split", facecam=(0.29, 0.5, 0.2, 0.3))
+    assert info["layout"] != "split"
 
 
 def test_split_geometry_small_source():
