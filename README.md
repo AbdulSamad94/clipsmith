@@ -2,6 +2,13 @@
 
 **A free, open-source alternative to OpusClip. Turn one long YouTube video into a batch of ready-to-post Shorts, on your own laptop.**
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Runs offline](https://img.shields.io/badge/runs-offline-brightgreen)
+![No API key](https://img.shields.io/badge/API%20key-not%20needed-brightgreen)
+![No GPU](https://img.shields.io/badge/GPU-not%20needed-brightgreen)
+[![GitHub stars](https://img.shields.io/github/stars/AbdulSamad94/clipsmith?style=social)](https://github.com/AbdulSamad94/clipsmith/stargazers)
+
 Paste a YouTube link. Clipsmith finds the best 30–60 second moments, crops them to vertical 9:16 around the speaker, burns in animated word-by-word captions, and ranks them by how likely they are to hold a viewer.
 
 - **Free and unlimited.** No credits, no monthly plan, no watermark, no clips that expire after 3 days.
@@ -11,6 +18,23 @@ Paste a YouTube link. Clipsmith finds the best 30–60 second moments, crops the
 > Not affiliated with OpusClip. "OpusClip" is mentioned only to describe what this project is an alternative to.
 
 ![Clipsmith screenshot](docs/screenshot.png)
+
+## Clipsmith vs OpusClip
+
+| | Clipsmith | OpusClip Free | OpusClip paid |
+|---|---|---|---|
+| Price | **Free forever** | $0 | from $15/month |
+| Clips per month | **Unlimited** | 60 credits | 150+ credits |
+| Watermark | **None** | Yes | No |
+| Clips expire | **Never** | After 3 days | After 30 days+ |
+| Runs on your computer, offline | **Yes** | No | No |
+| Your videos stay private | **Yes** | Uploaded | Uploaded |
+| Open source | **Yes (MIT)** | No | No |
+| AI picks + viral score | Yes | No score | Yes |
+| Animated captions + 9:16 reframe | Yes | Yes | Yes |
+| B-roll, scheduler, team features | Not yet | No | Yes |
+
+*OpusClip details from its public pricing page, November 2026.*
 
 ## What it does
 
@@ -90,7 +114,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 - [ ] Brand template (logo, fonts, colours)
 - [ ] Post and schedule directly to YouTube
 
-Contributions are welcome. Open an issue first for anything large.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) and the [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue) label. If Clipsmith saves you money, a ⭐ helps other people find it.
 
 ## Use responsibly
 
