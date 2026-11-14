@@ -109,6 +109,34 @@ def download(url: str, workdir: Path, progress: Progress) -> Source:
     )
 
 
+def from_local_file(path: Path, workdir: Path, progress: Progress, title: str | None = None) -> Source:
+    """An uploaded video: no captions to fetch, so transcribe it with Whisper."""
+    progress(2, "Reading video details")
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        duration = float(out.stdout.strip())
+    except ValueError:
+        raise ValueError("That file doesn't look like a video ffmpeg can read.") from None
+    if duration > config.MAX_VIDEO_HOURS * 3600:
+        raise ValueError(f"Video is longer than {config.MAX_VIDEO_HOURS} hours.")
+
+    progress(26, "Transcribing audio")
+    words = whisper_transcribe(path, workdir, progress)
+    if not words:
+        raise RuntimeError("Could not get any speech from this video.")
+    return Source(
+        video_path=path,
+        title=title or path.stem or "Untitled",
+        duration=duration or words[-1].end,
+        language="",
+        words=words,
+        transcript_source="whisper",
+    )
+
+
 _NOISE = re.compile(r"^\[.*\]$|^\(.*\)$|^>>+$|^♪+$")
 
 

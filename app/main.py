@@ -3,20 +3,24 @@ background, and serves progress and finished clips to the page."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 import traceback
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from starlette.background import BackgroundTask
 
 from . import config, render, selector, source
 
@@ -88,7 +92,12 @@ def _run(job_id: str, req: JobRequest) -> None:
 
     try:
         _update(job_id, status="running")
-        src = source.download(req.url, workdir, progress)
+        upload = _jobs[job_id].get("upload")
+        if upload:
+            path = next(workdir.glob("source.*"))
+            src = source.from_local_file(path, workdir, progress, title=Path(upload).stem)
+        else:
+            src = source.download(req.url, workdir, progress)
         _update(job_id, title=src.title, duration=src.duration, transcript_source=src.transcript_source)
 
         progress(42, "Finding the best moments")
@@ -153,27 +162,103 @@ def status() -> dict:
     }
 
 
-@app.post("/api/jobs")
-def create_job(req: JobRequest) -> dict:
-    if not _YT.match(req.url.strip()):
-        raise HTTPException(400, "That doesn't look like a YouTube link.")
+def _check_options(req: JobRequest) -> None:
     if req.min_len >= req.max_len:
         raise HTTPException(400, "Minimum length must be shorter than maximum length.")
     if req.style not in render.STYLES:
         raise HTTPException(400, "Unknown caption style.")
     if req.layout not in ("auto", "fill", "fit"):
         raise HTTPException(400, "Unknown layout.")
-    job_id = uuid.uuid4().hex[:10]
+
+
+def _new_job(req: JobRequest, job_id: str | None = None, **extra) -> dict:
+    job_id = job_id or uuid.uuid4().hex[:10]
     job = {
         "id": job_id, "url": req.url.strip(), "status": "queued", "progress": 0, "message": "Waiting to start",
         "title": None, "clips": [], "error": None, "warning": None, "selection": None,
         "created": time.time(), "options": req.model_dump(exclude={"url"}),
-    }
+    } | extra
     with _lock:
         _jobs[job_id] = job
         _save(job)
     _pool.submit(_run, job_id, req)
     return job
+
+
+@app.post("/api/jobs")
+def create_job(req: JobRequest) -> dict:
+    if not _YT.match(req.url.strip()):
+        raise HTTPException(400, "That doesn't look like a YouTube link.")
+    _check_options(req)
+    return _new_job(req)
+
+
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
+_MAX_UPLOAD_BYTES = 8 * 1024**3
+
+
+@app.post("/api/jobs/upload")
+async def upload_job(
+    file: UploadFile = File(...),
+    clip_count: int = Form(5),
+    min_len: int = Form(30),
+    max_len: int = Form(60),
+    style: str = Form("yellow"),
+    layout: str = Form("auto"),
+    hook: bool = Form(True),
+) -> dict:
+    name = Path(file.filename or "").name
+    ext = Path(name).suffix.lower()
+    if ext not in _VIDEO_EXTS:
+        raise HTTPException(400, "Please upload a video file: mp4, mov, mkv or webm.")
+    try:
+        req = JobRequest(url="", clip_count=clip_count, min_len=min_len, max_len=max_len,
+                         style=style, layout=layout, hook=hook)
+    except ValidationError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _check_options(req)
+    job_id = uuid.uuid4().hex[:10]
+    d = _job_dir(job_id)
+    d.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with open(d / f"source{ext}", "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, f"File is too large (limit {_MAX_UPLOAD_BYTES // 1024**3} GB).")
+                out.write(chunk)
+    except BaseException:  # includes a cancelled/interrupted upload
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    return _new_job(req, job_id, upload=name)
+
+
+@app.get("/api/jobs/{job_id}/zip")
+def download_zip(job_id: str) -> FileResponse:
+    with _lock:
+        job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found.")
+    d = _job_dir(job_id)
+    files = [d / Path(c["video"]).name for c in job.get("clips") or []]
+    files = [f for f in files if f.is_file()]
+    if not files:
+        raise HTTPException(409, "This video has no finished clips yet.")
+    # Build in a throwaway file (outside the served /media tree) and delete it once sent,
+    # so a download doesn't leave a second copy of every clip on disk.
+    fd, tmp = tempfile.mkstemp(suffix=".zip", dir=config.DATA_DIR)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+            for f in files:
+                z.write(f, f.name)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    title = re.sub(r'[\\/:*?"<>|]+', "", job.get("title") or "clips").strip()[:80] or "clips"
+    return FileResponse(tmp, media_type="application/zip", filename=f"{title}.zip",
+                        background=BackgroundTask(os.unlink, tmp))
 
 
 @app.get("/api/jobs")
