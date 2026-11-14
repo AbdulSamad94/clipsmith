@@ -93,6 +93,19 @@ def test_split_geometry_small_source():
     _check_rect(g["game"], 854, 480)
 
 
+def test_hook_can_be_placed_on_the_seam_instead_of_over_the_face():
+    ass = render.build_ass([], 0, 10, "yellow", hook="Watch this", hook_top=768)
+    hook_style = next(ln for ln in ass.splitlines() if ln.startswith("Style: Hook"))
+    margin_v = int(hook_style.split(",")[-2])
+    assert 680 <= margin_v <= 768  # the banner straddles the line between facecam and gameplay
+
+
+def test_hook_position_unchanged_by_default():
+    hook_style = next(ln for ln in render.build_ass([], 0, 10, "yellow", hook="x").splitlines()
+                      if ln.startswith("Style: Hook"))
+    assert hook_style.endswith(",90,90,230,1")
+
+
 # ---------- API ----------
 
 def test_api_accepts_split_layout(monkeypatch):
