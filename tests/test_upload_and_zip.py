@@ -97,3 +97,19 @@ def test_from_local_file(tmp_path, monkeypatch):
     assert src.transcript_source == "whisper"
     assert src.words[0].text == "hello"
     assert src.video_path == video
+
+
+def test_upload_over_size_limit_is_rejected_and_removed(client, monkeypatch):
+    monkeypatch.setattr(main, "_MAX_UPLOAD_BYTES", 10)
+    main.config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    before = set(main.config.JOBS_DIR.iterdir())
+    res = _upload(client, data=b"x" * 11)
+    assert res.status_code == 413
+    assert client.submitted == []
+    assert set(main.config.JOBS_DIR.iterdir()) == before
+
+
+def test_zip_is_not_left_on_disk(client):
+    job_id = _finished_job(client)
+    assert client.get(f"/api/jobs/{job_id}/zip").status_code == 200
+    assert not list(main._job_dir(job_id).glob("*.zip*"))
