@@ -28,8 +28,11 @@ STYLES = {
 
 # ---------- reframing ----------
 
-def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, float | None]]:
-    """Sample the clip and return (time_in_clip, face_centre_x as 0..1 or None)."""
+Box = tuple[float, float, float, float]  # centre x, centre y, width, height; all 0..1 of the frame
+
+
+def detect_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, list[Box]]]:
+    """Sample the clip and return (time_in_clip, every face box found in that frame)."""
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     src_w, src_h = _probe_size(video)
     fw_px = 480
@@ -40,7 +43,7 @@ def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list
          "-an", "-vf", f"fps={fps},scale={fw_px}:{fh_px}", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
-    samples: list[tuple[float, float | None]] = []
+    samples: list[tuple[float, list[Box]]] = []
     frame_bytes = fw_px * fh_px
     i = 0
     try:
@@ -49,20 +52,118 @@ def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list
             if len(buf) < frame_bytes:
                 break
             img = np.frombuffer(buf, dtype=np.uint8).reshape(fh_px, fw_px)
-            faces = cascade.detectMultiScale(img, scaleFactor=1.15, minNeighbors=6, minSize=(36, 36))
-            # a face under ~7% of frame width is a wide shot (stage, audience);
-            # following it gives a jumpy crop with the speaker at the edge
-            faces = [f for f in faces if f[2] >= 0.07 * fw_px]
-            if len(faces):
-                x, _, fw, _ = max(faces, key=lambda f: f[2] * f[3])
-                samples.append((i / fps, (x + fw / 2) / fw_px))
-            else:
-                samples.append((i / fps, None))
+            faces = cascade.detectMultiScale(img, scaleFactor=1.15, minNeighbors=6, minSize=(24, 24))
+            samples.append((i / fps, [
+                ((x + fw / 2) / fw_px, (y + fh / 2) / fh_px, fw / fw_px, fh / fh_px) for x, y, fw, fh in faces
+            ]))
             i += 1
     finally:
         proc.stdout.close()
         proc.wait()
     return samples
+
+
+def _faces(entry) -> list[Box]:
+    """A frame's faces as a list, whether given as a list, a single box or None."""
+    if not entry:
+        return []
+    return [entry] if isinstance(entry[0], (int, float)) else list(entry)
+
+
+def track_samples(boxes: list[tuple[float, list[Box] | Box | None]]) -> list[tuple[float, float | None]]:
+    """Face boxes -> centre-x of the largest face per frame, for camera_path.
+    A face under ~7% of frame width is a wide shot (stage, audience);
+    following it gives a jumpy crop."""
+    out = []
+    for t, entry in boxes:
+        big = [b for b in _faces(entry) if b[2] >= 0.07]
+        out.append((t, max(big, key=lambda b: b[2] * b[3])[0] if big else None))
+    return out
+
+
+def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, float | None]]:
+    """Sample the clip and return (time_in_clip, face_centre_x as 0..1 or None)."""
+    return track_samples(detect_faces(video, start, end, fps))
+
+
+def facecam_from_faces(boxes: list[tuple[float, list[Box] | Box | None]]) -> Box | None:
+    """A streamer's facecam: a small face that stays put away from the middle of
+    the frame. Every face in every frame is a candidate, so a bigger face in the
+    content (a game character, a video being reacted to) can't hide it. People
+    look away from the camera a lot, so a face in a quarter of the frames is
+    enough. Returns the median box, or None for anything else (talking heads,
+    moving people, rare detections)."""
+    # small, off-centre faces only; a big or centred face is the main subject
+    cands = [(i, b) for i, (_, entry) in enumerate(boxes) for b in _faces(entry)
+             if b[2] <= 0.22 and not 0.3 <= b[0] <= 0.7]
+    if not cands:
+        return None
+
+    def near(a: Box, b: Box, r: float) -> bool:
+        return abs(a[0] - b[0]) <= r and abs(a[1] - b[1]) <= r
+
+    # the spot where a face shows up most often...
+    anchor = max((b for _, b in cands), key=lambda a: len({i for i, b in cands if near(a, b, 0.06)}))
+    # ...and the one face per frame that sits there
+    spot: dict[int, Box] = {}
+    for i, b in cands:
+        if near(anchor, b, 0.08) and i not in spot:
+            spot[i] = b
+    seen = list(spot.values())
+    if len(seen) < max(3, 0.25 * len(boxes)):
+        return None
+    if statistics.pstdev([b[0] for b in seen]) > 0.06 or statistics.pstdev([b[1] for b in seen]) > 0.06:
+        return None  # it moves around: a person in the scene, not a fixed camera overlay
+    return tuple(statistics.median(b[k] for b in seen) for k in range(4))
+
+
+def _even(v: float) -> int:
+    return max(2, int(v) // 2 * 2)
+
+
+def split_layout(
+    src_w: int, src_h: int, cam: Box, out_w: int, out_h: int, cam_share: float = 0.4
+) -> dict | None:
+    """Crops for a stacked frame: facecam on top (cam_share of the height),
+    gameplay below. Each crop has its panel's shape, so nothing is stretched.
+    None when no gameplay crop can leave the facecam out (it would show twice)."""
+    top_h = _even(out_h * cam_share)
+    bottom_h = out_h - top_h
+    cx, cy, fw, fh = cam
+
+    # Facecam: about 2.2 face-heights tall, a little below the face to show
+    # the shoulders, shaped like the top panel.
+    ch = min(src_h, fh * src_h * 2.2)
+    cw = ch * out_w / top_h
+    if cw > src_w:
+        cw, ch = src_w, src_w * top_h / out_w
+    cam_x = min(max(0, cx * src_w - cw / 2), src_w - cw)
+    cam_y = min(max(0, cy * src_h - ch * 0.4), src_h - ch)
+
+    # Gameplay: full height, from the middle of the frame, pushed past the
+    # facecam (with a margin) when it would otherwise show it a second time.
+    gh = src_h
+    gw = gh * out_w / bottom_h
+    if gw > src_w:
+        gw, gh = src_w, src_w * bottom_h / out_w
+    gx = (src_w - gw) / 2
+    margin = 1.2 * fw * src_w
+    face_left, face_right = cx * src_w - margin, cx * src_w + margin
+    if cx < 0.5 and gx < face_right:
+        gx = min(face_right, src_w - gw)
+    elif cx >= 0.5 and gx + gw > face_left:
+        gx = max(0, face_left - gw)
+    gy = (src_h - gh) / 2
+    if gx < (cx + fw / 2) * src_w and gx + gw > (cx - fw / 2) * src_w:
+        return None  # the face itself would still be in the gameplay panel
+
+    def rect(x, y, w, h):  # even sizes and offsets (yuv420p), kept inside the frame
+        w, h = _even(min(w, src_w)), _even(min(h, src_h))
+        x = int(min(max(0, x), src_w - w)) // 2 * 2
+        y = int(min(max(0, y), src_h - h)) // 2 * 2
+        return (x, y, w, h)
+
+    return {"cam": rect(cam_x, cam_y, cw, ch), "game": rect(gx, gy, gw, gh), "top_h": top_h, "bottom_h": bottom_h}
 
 
 def camera_path(samples: list[tuple[float, float | None]], deadzone: float = 0.09) -> list[tuple[float, float]] | None:
@@ -139,7 +240,10 @@ def _groups(words: list[Word], max_words: int = 3, max_chars: int = 18) -> list[
 def build_ass(
     words: list[Word], clip_start: float, clip_len: float, style_key: str, hook: str | None,
     size: tuple[int, int] = (W, H),
+    hook_top: int | None = None,
 ) -> str:
+    """`hook_top`: y of a panel seam to centre the hook banner on (split layout),
+    instead of its usual place near the top of the frame."""
     st = STYLES.get(style_key, STYLES["yellow"])
     w, h = size
     # Margins are proportional to the frame (they reproduce the 9:16 values exactly);
@@ -148,6 +252,8 @@ def build_ass(
     cap_size, hook_size = round(st["size"] * k), round(64 * k)
     cap_lr, cap_v = round(w * 0.065), round(h * 0.245)
     hook_lr, hook_v = round(w * 0.0834), round(h * 0.12)
+    if hook_top is not None:
+        hook_v = max(0, hook_top - round(hook_size * 0.6))  # straddle the seam, clear of the face
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
@@ -213,14 +319,14 @@ def render_clip(
     layout: str = "auto",
     hook: str | None = None,
     aspect: str = DEFAULT_ASPECT,
+    facecam: Box | None = None,
 ) -> dict:
-    """Writes <name>.mp4 and <name>.jpg into out_dir. Returns what layout was used."""
+    """Writes <name>.mp4 and <name>.jpg into out_dir. Returns what layout was used.
+    `facecam` skips detection (used by tests and by a forced split)."""
     clip_len = end - start
     W, H = ASPECTS.get(aspect, ASPECTS[DEFAULT_ASPECT])
     clip_words = [w for w in words if w.end > start and w.start < end]
     ass_name = f"{name}.ass"
-    (out_dir / ass_name).write_text(build_ass(clip_words, start, clip_len, style, hook, size=(W, H)), encoding="utf-8")
-
     src_w, src_h = _probe_size(video)
     src_r, out_r = src_w / src_h, W / H
     # Source already (close to) the target shape: just scale and trim the edges.
@@ -230,14 +336,39 @@ def render_clip(
     if src_r < out_r and not vertical_already:
         used = layout = "fit"  # source narrower than the output: a side crop can't fill it
     keys = None
-    if layout in ("auto", "fill") and not vertical_already:
-        keys = camera_path(track_faces(video, start, end))
-        if layout == "auto":
-            used = "fill" if keys else "fit"
-        elif keys is None:
-            keys = [(0.0, 0.5)]  # forced fill with no face: centre crop
+    split = None
+    tall = out_r < 1  # stacking two panels only makes sense in a tall frame
+    if layout in ("auto", "fill", "split") and not vertical_already:
+        boxes = detect_faces(video, start, end) if facecam is None else []
+        if layout in ("auto", "split") and tall:
+            cam = facecam or facecam_from_faces(boxes)
+            split = split_layout(src_w, src_h, cam, W, H) if cam else None
+            if split:
+                used = "split"
+        if split is None:
+            if layout == "split":
+                layout = "auto"  # asked for split but no facecam found: pick the next best layout
+            keys = camera_path(track_samples(boxes)) if layout in ("auto", "fill") else None
+            if layout == "auto":
+                used = "fill" if keys else "fit"
+            elif keys is None:
+                keys = [(0.0, 0.5)]  # forced fill with no face: centre crop
 
-    if vertical_already:
+    (out_dir / ass_name).write_text(
+        build_ass(clip_words, start, clip_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
+        encoding="utf-8",
+    )
+
+    if split:
+        cx, cy, cw, ch = split["cam"]
+        gx, gy, gw, gh = split["game"]
+        graph = (
+            f"[0:v]split[a][b];"
+            f"[a]crop={cw}:{ch}:{cx}:{cy},scale={W}:{split['top_h']}:flags=lanczos,setsar=1[cam];"
+            f"[b]crop={gw}:{gh}:{gx}:{gy},scale={W}:{split['bottom_h']}:flags=lanczos,setsar=1[game];"
+            f"[cam][game]vstack,ass={ass_name}[v]"
+        )
+    elif vertical_already:
         used = "source"
         graph = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},ass={ass_name}[v]"
     elif used == "fill":
