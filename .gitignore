@@ -6,3 +6,4 @@ __pycache__/
 error/
 .DS_Store
 Thumbs.db
+.claude/

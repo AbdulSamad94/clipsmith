@@ -5,10 +5,12 @@ import json
 import re
 import shutil
 import subprocess
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import yt_dlp
 
 from . import config
@@ -153,6 +155,13 @@ def parse_json3(path: Path) -> list[Word]:
     return words
 
 
+def read_wav_16k(path: Path) -> np.ndarray:
+    """Mono 16-bit 16 kHz WAV (as ffmpeg writes it above) -> float32 in [-1, 1)."""
+    with wave.open(str(path), "rb") as w:
+        data = w.readframes(w.getnframes())
+    return np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+
+
 def whisper_transcribe(video_path: Path, workdir: Path, progress: Progress) -> list[Word]:
     from faster_whisper import WhisperModel
 
@@ -164,7 +173,8 @@ def whisper_transcribe(video_path: Path, workdir: Path, progress: Progress) -> l
     model = WhisperModel(
         config.WHISPER_MODEL, device="cpu", compute_type="int8", download_root=str(config.MODELS_DIR / "whisper")
     )
-    segments, info = model.transcribe(str(wav), word_timestamps=True, vad_filter=True)
+    # Pass samples, not the path: faster-whisper's own decoder breaks on PyAV >= 15.
+    segments, info = model.transcribe(read_wav_16k(wav), word_timestamps=True, vad_filter=True)
     total = info.duration or 1
     words: list[Word] = []
     for seg in segments:
