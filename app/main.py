@@ -41,6 +41,10 @@ class JobRequest(BaseModel):
     style: str = "yellow"
     layout: str = "auto"
     hook: bool = True
+    prompt: str = Field(default="", max_length=300)
+    start_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    end_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    aspect: str = "9:16"
 
 
 def _job_dir(job_id: str) -> Path:
@@ -77,6 +81,35 @@ def _load_existing() -> None:
 _load_existing()
 
 
+def _clock(t: float) -> str:
+    t = int(t)
+    return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
+
+
+def _render_bounds(
+    clip_start: float,
+    clip_end: float,
+    words: list,
+    duration: float | None,
+    range_start: float | None = None,
+    range_end: float | None = None,
+) -> tuple[float, float]:
+    """Pad a clip slightly so its first word isn't cut and the moment can land:
+    run on into the pause after the last word (a laugh, a reaction, engine
+    noise), never past the video or outside a requested From/To range."""
+    start = max(0.0, clip_start - 0.15)
+    next_word = next((w.start for w in words if w.start >= clip_end - 0.05), None)
+    tail = 1.5 if next_word is None else max(0.3, min(1.5, next_word - clip_end - 0.1))
+    end = clip_end + tail
+    if duration:
+        end = min(end, duration)
+    if range_start is not None:
+        start = max(start, range_start)
+    if range_end is not None:
+        end = min(end, range_end)
+    return round(start, 3), round(end, 3)
+
+
 def _run(job_id: str, req: JobRequest) -> None:
     workdir = _job_dir(job_id)
 
@@ -101,29 +134,32 @@ def _run(job_id: str, req: JobRequest) -> None:
         _update(job_id, title=src.title, duration=src.duration, transcript_source=src.transcript_source)
 
         progress(42, "Finding the best moments")
-        sentences = selector.to_sentences(src.words)
+        sentences = selector.within(selector.to_sentences(src.words), req.start_time, req.end_time)
         clips, method, warning = selector.select(
-            sentences, src.title, req.clip_count, req.min_len, req.max_len, progress
-        )
+            sentences, src.title, req.clip_count, req.min_len, req.max_len, progress, prompt=req.prompt
+        ) if sentences else ([], "basic", None)
         if not clips:
+            ranged = req.start_time is not None or req.end_time is not None
+            where = (
+                f"between {_clock(req.start_time or 0)} and "
+                f"{_clock(req.end_time) if req.end_time is not None else 'the end'} of this video"
+                if ranged else "in this video"
+            )
             raise RuntimeError(
-                f"No stretch of speech between {req.min_len} and {req.max_len} seconds was found in this video."
+                f"No stretch of speech between {req.min_len} and {req.max_len} seconds was found {where}."
             )
         _update(job_id, selection=method, warning=warning)
 
         done: list[dict] = []
         for i, clip in enumerate(clips):
             progress(45 + 54 * i / len(clips), f"Rendering clip {i + 1} of {len(clips)}")
-            # Let the moment land: run on into the pause after the last word
-            # (a laugh, a reaction, engine noise) instead of cutting right after it.
-            start = max(0.0, clip.start - 0.15)
-            next_word = next((w.start for w in src.words if w.start >= clip.end - 0.05), None)
-            tail = 1.5 if next_word is None else max(0.3, min(1.5, next_word - clip.end - 0.1))
-            end = min(src.duration or clip.end + tail, clip.end + tail)
+            start, end = _render_bounds(
+                clip.start, clip.end, src.words, src.duration, req.start_time, req.end_time
+            )
             name = f"clip_{i + 1:02d}"
             info = render.render_clip(
                 src.video_path, src.words, start, end, workdir, name,
-                style=req.style, layout=req.layout, hook=clip.hook if req.hook else None,
+                style=req.style, layout=req.layout, hook=clip.hook if req.hook else None, aspect=req.aspect,
             )
             done.append(
                 asdict(clip)
@@ -134,6 +170,7 @@ def _run(job_id: str, req: JobRequest) -> None:
                     "video": f"/media/{job_id}/{name}.mp4",
                     "thumb": f"/media/{job_id}/{name}.jpg",
                     "layout": info["layout"],
+                    "aspect": req.aspect,
                 }
             )
             _update(job_id, clips=list(done))
@@ -169,6 +206,10 @@ def _check_options(req: JobRequest) -> None:
         raise HTTPException(400, "Unknown caption style.")
     if req.layout not in ("auto", "fill", "fit"):
         raise HTTPException(400, "Unknown layout.")
+    if req.start_time is not None and req.end_time is not None and req.end_time <= req.start_time:
+        raise HTTPException(400, "The 'To' time must be after the 'From' time.")
+    if req.aspect not in render.ASPECTS:
+        raise HTTPException(400, "Unknown aspect ratio.")
 
 
 def _new_job(req: JobRequest, job_id: str | None = None, **extra) -> dict:
@@ -206,6 +247,10 @@ async def upload_job(
     style: str = Form("yellow"),
     layout: str = Form("auto"),
     hook: bool = Form(True),
+    prompt: str = Form(""),
+    start_time: float | None = Form(None),
+    end_time: float | None = Form(None),
+    aspect: str = Form("9:16"),
 ) -> dict:
     name = Path(file.filename or "").name
     ext = Path(name).suffix.lower()
@@ -213,7 +258,8 @@ async def upload_job(
         raise HTTPException(400, "Please upload a video file: mp4, mov, mkv or webm.")
     try:
         req = JobRequest(url="", clip_count=clip_count, min_len=min_len, max_len=max_len,
-                         style=style, layout=layout, hook=hook)
+                         style=style, layout=layout, hook=hook,
+                         prompt=prompt, start_time=start_time, end_time=end_time, aspect=aspect)
     except ValidationError as exc:
         raise HTTPException(422, str(exc)) from None
     _check_options(req)
