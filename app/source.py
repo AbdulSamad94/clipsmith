@@ -56,7 +56,6 @@ def download(url: str, workdir: Path, progress: Progress) -> Source:
         raise ValueError("Live streams can't be clipped until they finish.")
 
     lang = (info.get("language") or "en").split("-")[0]
-    sub_langs = [f"{lang}-orig", lang, "en-orig", "en"]
 
     def hook(d: dict) -> None:
         if d.get("status") == "downloading":
@@ -68,10 +67,7 @@ def download(url: str, workdir: Path, progress: Progress) -> Source:
         "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
         "merge_output_format": "mp4",
         "outtmpl": str(workdir / "source.%(ext)s"),
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": sub_langs,
-        "subtitlesformat": "json3",
+        "retries": 5,
         "progress_hooks": [hook],
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -86,14 +82,12 @@ def download(url: str, workdir: Path, progress: Progress) -> Source:
 
     words: list[Word] = []
     transcript_source = "youtube-captions"
-    for code in sub_langs:
-        sub = workdir / f"source.{code}.json3"
-        if sub.exists():
-            words = parse_json3(sub)
-            if words:
-                break
+    track = pick_caption_track(info, lang)
+    if track:
+        progress(25, "Getting captions")
+        words = _fetch_captions(url, workdir, track)
     if not words:
-        progress(26, "No captions on YouTube, transcribing audio (slower)")
+        progress(26, "No captions from YouTube, transcribing audio (slower)")
         words = whisper_transcribe(video_path, workdir, progress)
         transcript_source = "whisper"
     if not words:
@@ -107,6 +101,40 @@ def download(url: str, workdir: Path, progress: Progress) -> Source:
         words=words,
         transcript_source=transcript_source,
     )
+
+
+def pick_caption_track(info: dict, lang: str) -> str | None:
+    """The one caption track worth fetching: manual captions beat automatic ones,
+    and the video's own language beats English. Asking YouTube for a single track
+    (not every variant) keeps us clear of its rate limit."""
+    manual = info.get("subtitles") or {}
+    auto = info.get("automatic_captions") or {}
+    for pool, codes in ((manual, [lang, "en"]), (auto, [f"{lang}-orig", lang, "en-orig", "en"])):
+        for code in codes:
+            if code in pool:
+                return code
+    return None
+
+
+def _fetch_captions(url: str, workdir: Path, track: str) -> list[Word]:
+    """Captions are a shortcut, not a requirement: if YouTube refuses them
+    (e.g. HTTP 429 Too Many Requests), return nothing and let Whisper transcribe."""
+    opts = _ydl_base() | {
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": [track],
+        "subtitlesformat": "json3",
+        "outtmpl": str(workdir / "source.%(ext)s"),
+        "retries": 3,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except yt_dlp.utils.DownloadError:
+        return []
+    sub = workdir / f"source.{track}.json3"
+    return parse_json3(sub) if sub.exists() else []
 
 
 def from_local_file(path: Path, workdir: Path, progress: Progress, title: str | None = None) -> Source:
