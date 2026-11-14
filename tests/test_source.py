@@ -1,6 +1,11 @@
 import json
+import wave
 
-from app.source import parse_json3
+import numpy as np
+import pytest
+
+from app import source
+from app.source import parse_json3, read_wav_16k
 
 
 def _write(tmp_path, events):
@@ -41,6 +46,50 @@ def test_word_ends_are_capped_and_ordered(tmp_path):
     a, b = parse_json3(p)
     assert a.end <= a.start + 0.9  # a word before a long pause doesn't linger
     assert a.end <= b.start
+
+
+def _write_wav(path, samples):
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(samples.astype("<i2").tobytes())
+
+
+def test_read_wav_returns_float32_in_range(tmp_path):
+    p = tmp_path / "a.wav"
+    _write_wav(p, np.array([0, 16384, -32768, 32767]))
+    audio = read_wav_16k(p)
+    assert audio.dtype == np.float32
+    assert audio.tolist() == pytest.approx([0.0, 0.5, -1.0, 32767 / 32768])
+
+
+def test_whisper_gets_decoded_audio_not_a_path(tmp_path, monkeypatch):
+    """faster-whisper's own file decoding breaks with PyAV >= 15 (removed
+    `metadata_errors`), so we must hand it samples, never a filename."""
+    seen = {}
+
+    class FakeModel:
+        def __init__(self, *a, **k):
+            pass
+
+        def transcribe(self, audio, **kw):
+            seen["audio"] = audio
+            info = type("I", (), {"duration": 1.0})()
+            word = type("W", (), {"word": " hi", "start": 0.1, "end": 0.4})()
+            seg = type("S", (), {"words": [word], "end": 1.0})()
+            return iter([seg]), info
+
+    import faster_whisper
+    monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
+
+    def fake_ffmpeg(cmd, **kw):  # write the wav ffmpeg would have produced
+        _write_wav(cmd[-1], np.zeros(16000))
+
+    monkeypatch.setattr(source.subprocess, "run", fake_ffmpeg)
+    words = source.whisper_transcribe(tmp_path / "v.mp4", tmp_path, lambda *a: None)
+    assert isinstance(seen["audio"], np.ndarray)
+    assert [w.text for w in words] == ["hi"]
 
 
 def test_events_without_text_are_ignored(tmp_path):
