@@ -2,6 +2,7 @@
 
 **A free, open-source alternative to OpusClip. Turn one long YouTube video into a batch of ready-to-post Shorts, on your own laptop.**
 
+[![tests](https://github.com/AbdulSamad94/clipsmith/actions/workflows/tests.yml/badge.svg)](https://github.com/AbdulSamad94/clipsmith/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Runs offline](https://img.shields.io/badge/runs-offline-brightgreen)

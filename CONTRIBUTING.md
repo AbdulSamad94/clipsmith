@@ -23,6 +23,15 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome.
 
 Look for issues labelled [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue). Items on the README roadmap are fair game too; comment on the issue first so two people don't build the same thing.
 
+## Tests
+
+```
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Write the test first, watch it fail, then make it pass. Tests must not need the network, an AI model or a real YouTube video: test pure functions directly and patch anything slow (see `tests/conftest.py` and `tests/test_api.py`). CI runs the suite on Windows and Linux for every pull request.
+
 ## Pull requests
 
 - Keep each PR to one change.

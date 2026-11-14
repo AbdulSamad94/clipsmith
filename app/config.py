@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # override: the app's .env wins over machine-wide variables (e.g. an older OLLAMA_MODELS)
 load_dotenv(ROOT / ".env", override=True)
 
-DATA_DIR = ROOT / "data"
+DATA_DIR = Path(os.environ.get("CLIPSMITH_DATA_DIR") or ROOT / "data")
 JOBS_DIR = DATA_DIR / "jobs"
 MODELS_DIR = DATA_DIR / "models"
 STATIC_DIR = ROOT / "static"
