@@ -42,8 +42,8 @@ class JobRequest(BaseModel):
     layout: str = "auto"
     hook: bool = True
     prompt: str = Field(default="", max_length=300)
-    start_time: float | None = Field(default=None, ge=0)
-    end_time: float | None = Field(default=None, ge=0)
+    start_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    end_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 def _job_dir(job_id: str) -> Path:
