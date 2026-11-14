@@ -41,6 +41,9 @@ class JobRequest(BaseModel):
     style: str = "yellow"
     layout: str = "auto"
     hook: bool = True
+    prompt: str = Field(default="", max_length=300)
+    start_time: float | None = Field(default=None, ge=0)
+    end_time: float | None = Field(default=None, ge=0)
 
 
 def _job_dir(job_id: str) -> Path:
@@ -77,6 +80,11 @@ def _load_existing() -> None:
 _load_existing()
 
 
+def _clock(t: float) -> str:
+    t = int(t)
+    return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
+
+
 def _run(job_id: str, req: JobRequest) -> None:
     workdir = _job_dir(job_id)
 
@@ -101,13 +109,19 @@ def _run(job_id: str, req: JobRequest) -> None:
         _update(job_id, title=src.title, duration=src.duration, transcript_source=src.transcript_source)
 
         progress(42, "Finding the best moments")
-        sentences = selector.to_sentences(src.words)
+        sentences = selector.within(selector.to_sentences(src.words), req.start_time, req.end_time)
         clips, method, warning = selector.select(
-            sentences, src.title, req.clip_count, req.min_len, req.max_len, progress
-        )
+            sentences, src.title, req.clip_count, req.min_len, req.max_len, progress, prompt=req.prompt
+        ) if sentences else ([], "basic", None)
         if not clips:
+            ranged = req.start_time is not None or req.end_time is not None
+            where = (
+                f"between {_clock(req.start_time or 0)} and "
+                f"{_clock(req.end_time) if req.end_time is not None else 'the end'} of this video"
+                if ranged else "in this video"
+            )
             raise RuntimeError(
-                f"No stretch of speech between {req.min_len} and {req.max_len} seconds was found in this video."
+                f"No stretch of speech between {req.min_len} and {req.max_len} seconds was found {where}."
             )
         _update(job_id, selection=method, warning=warning)
 
@@ -169,6 +183,8 @@ def _check_options(req: JobRequest) -> None:
         raise HTTPException(400, "Unknown caption style.")
     if req.layout not in ("auto", "fill", "fit"):
         raise HTTPException(400, "Unknown layout.")
+    if req.start_time is not None and req.end_time is not None and req.end_time <= req.start_time:
+        raise HTTPException(400, "The 'To' time must be after the 'From' time.")
 
 
 def _new_job(req: JobRequest, job_id: str | None = None, **extra) -> dict:
@@ -206,6 +222,9 @@ async def upload_job(
     style: str = Form("yellow"),
     layout: str = Form("auto"),
     hook: bool = Form(True),
+    prompt: str = Form(""),
+    start_time: float | None = Form(None),
+    end_time: float | None = Form(None),
 ) -> dict:
     name = Path(file.filename or "").name
     ext = Path(name).suffix.lower()
@@ -213,7 +232,8 @@ async def upload_job(
         raise HTTPException(400, "Please upload a video file: mp4, mov, mkv or webm.")
     try:
         req = JobRequest(url="", clip_count=clip_count, min_len=min_len, max_len=max_len,
-                         style=style, layout=layout, hook=hook)
+                         style=style, layout=layout, hook=hook,
+                         prompt=prompt, start_time=start_time, end_time=end_time)
     except ValidationError as exc:
         raise HTTPException(422, str(exc)) from None
     _check_options(req)

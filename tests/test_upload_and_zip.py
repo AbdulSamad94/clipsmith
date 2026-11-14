@@ -36,6 +36,18 @@ def test_upload_is_queued_and_saved(client):
     assert saved.read_bytes() == b"fake video bytes"
 
 
+def test_upload_carries_prompt_and_time_range(client):
+    job = _upload(client, prompt="the money part", start_time="60", end_time="600").json()
+    assert job["options"]["prompt"] == "the money part"
+    assert job["options"]["start_time"] == 60 and job["options"]["end_time"] == 600
+
+
+def test_upload_rejects_backwards_time_range(client):
+    res = _upload(client, start_time="600", end_time="60")
+    assert res.status_code == 400 and "'To' time" in res.json()["detail"]
+    assert client.submitted == []
+
+
 @pytest.mark.parametrize("name", ["notes.txt", "video", "clip.avi"])
 def test_upload_rejects_bad_extension(client, name):
     res = _upload(client, name=name)
