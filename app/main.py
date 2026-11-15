@@ -14,21 +14,24 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
-from . import config, render, selector, source
+from . import config, render, selector, source, youtube
 
 app = FastAPI(title="Clipsmith")
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 _pool = ThreadPoolExecutor(max_workers=1)  # one video at a time; encoding uses every core
+_upload_pool = ThreadPoolExecutor(max_workers=1)  # YouTube uploads don't wait behind rendering
 
 _YT = re.compile(r"^https?://([\w-]+\.)?(youtube\.com|youtu\.be)/", re.I)
 
@@ -75,6 +78,10 @@ def _load_existing() -> None:
         if job.get("status") in ("queued", "running"):
             job["status"] = "error"
             job["error"] = "The app was closed while this was processing."
+        for clip in job.get("clips") or []:
+            yt = clip.get("youtube")
+            if yt and yt.get("status") in ("queued", "uploading"):
+                clip["youtube"] = {"status": "error", "error": "The app was closed during the upload. Post it again."}
         _jobs[job["id"]] = job
 
 
@@ -350,9 +357,117 @@ def delete_job(job_id: str) -> dict:
     return {"ok": True}
 
 
+# ---------- YouTube ----------
+
+class PublishRequest(BaseModel):
+    title: str = Field(max_length=500)
+    description: str = Field(default="", max_length=10000)
+    hashtags: list[str] = Field(default_factory=list, max_length=100)
+    privacy: str = "public"
+    publish_at: datetime | None = None
+    made_for_kids: bool = False
+    notify_subscribers: bool = True
+    add_source_link: bool = False
+
+
+@app.get("/api/youtube")
+def youtube_status() -> dict:
+    return youtube.status()
+
+
+@app.get("/api/youtube/connect")
+def youtube_connect(request: Request) -> RedirectResponse:
+    # Google documents the desktop loopback redirect as http://127.0.0.1:port with
+    # no path, so Google sends the user back to this app's root URL (see index()).
+    redirect = str(request.base_url)
+    try:
+        return RedirectResponse(youtube.start_auth(redirect), status_code=307)
+    except youtube.NotConfigured as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.post("/api/youtube/disconnect")
+def youtube_disconnect() -> dict:
+    youtube.disconnect()
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/clips/{index}/youtube")
+def publish_clip(job_id: str, index: int, req: PublishRequest) -> dict:
+    if not youtube.status()["connected"]:
+        raise HTTPException(409, "Connect YouTube first.")
+    with _lock:
+        job = _jobs.get(job_id)
+        clips = (job or {}).get("clips") or []
+        if not job or not 0 <= index < len(clips):
+            raise HTTPException(404, "Clip not found.")
+        clip = clips[index]
+        if (clip.get("youtube") or {}).get("status") in ("queued", "uploading"):
+            raise HTTPException(409, "This clip is already being posted.")
+        source_url = job.get("url") if req.add_source_link and _YT.match(job.get("url") or "") else None
+        try:
+            meta = youtube.build_metadata(
+                title=req.title, description=req.description, hashtags=req.hashtags, privacy=req.privacy,
+                publish_at=req.publish_at, made_for_kids=req.made_for_kids, source_url=source_url,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        clip["youtube"] = {"status": "queued", "progress": 0}
+        _save(job)
+    _upload_pool.submit(_publish, job_id, index, meta, req.notify_subscribers)
+    return clip["youtube"]
+
+
+def _set_youtube(job_id: str, index: int, value: dict) -> None:
+    with _lock:
+        job = _jobs.get(job_id)
+        if job and index < len(job.get("clips") or []):
+            job["clips"][index]["youtube"] = value
+            _save(job)
+
+
+def _publish(job_id: str, index: int, meta: dict, notify: bool) -> None:
+    with _lock:
+        job = _jobs.get(job_id)
+        clip = job["clips"][index] if job else None
+    if not clip:
+        return
+    path = _job_dir(job_id) / Path(clip["video"]).name
+    last = {"pct": -10}
+
+    def progress(pct: int) -> None:
+        if pct - last["pct"] >= 5 or pct == 100:  # don't rewrite job.json for every chunk
+            last["pct"] = pct
+            _set_youtube(job_id, index, {"status": "uploading", "progress": pct})
+
+    try:
+        _set_youtube(job_id, index, {"status": "uploading", "progress": 0})
+        video_id = youtube.upload(path, meta, notify_subscribers=notify, progress=progress)
+        result = {"status": "done", "video_id": video_id, "url": f"https://youtu.be/{video_id}"}
+        if meta.get("status", {}).get("publishAt"):
+            result["scheduled_for"] = meta["status"]["publishAt"]
+        else:
+            result["privacy"] = meta.get("status", {}).get("privacyStatus")
+        _set_youtube(job_id, index, result)
+    except youtube.UploadError as exc:
+        _set_youtube(job_id, index, {"status": "error", "error": str(exc)})
+    except Exception as exc:
+        traceback.print_exc()
+        _set_youtube(job_id, index, {"status": "error", "error": f"Upload failed: {exc}"[:300]})
+
+
 app.mount("/media", StaticFiles(directory=config.JOBS_DIR), name="media")
 
 
 @app.get("/")
-def index() -> FileResponse:
+def index(state: str | None = None, code: str | None = None, error: str | None = None):
+    # Google sends the browser back here after the YouTube sign-in.
+    if error and state:
+        return RedirectResponse(f"/?youtube=error&reason={quote(error[:100])}", status_code=303)
+    if state and code:
+        try:
+            youtube.finish_auth(state, code)
+        except youtube.AuthError:
+            return RedirectResponse("/?youtube=error&reason=expired", status_code=303)
+        return RedirectResponse("/?youtube=connected", status_code=303)
     return FileResponse(config.STATIC_DIR / "index.html")
