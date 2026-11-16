@@ -197,3 +197,53 @@ def test_short_pieces_with_speech_are_kept(monkeypatch, tmp_path):
     words = [Word("yes", 17.25, 17.5)]
     keep = trim.plan(tmp_path / "v.mp4", words, 0, 40)
     assert any(s <= 17.25 <= e for s, e in keep)
+
+
+# ---------- review fixes (#23) ----------
+
+def test_short_piece_is_kept_when_a_word_runs_into_it(monkeypatch, tmp_path):
+    """The word starts inside the first pause (rough timing) but its sound is in the scrap."""
+    # cuts become 16.15-17.35 and 17.75-18.95, leaving a 0.4 s piece 17.35-17.75;
+    # the word starts at 17.2 (inside the first cut) but is spoken into the piece
+    monkeypatch.setattr(trim, "detect_silences", lambda *a: [(16.0, 17.5), (17.6, 19.1)])
+    words = [Word("yes", 17.2, 17.6)]
+    keep = trim.plan(tmp_path / "v.mp4", words, 0, 40)
+    assert any(s < 17.6 and e > 17.2 for s, e in keep)
+
+
+def test_caption_kept_for_a_word_that_starts_before_the_clip():
+    keep = [(0.0, 10.0)]
+    words = [Word("hello", 9.9, 10.4), Word("there", 10.5, 10.9)]
+    out = trim.remap_words(words, clip_start=10.0, keep=keep)
+    assert [(w.text, w.start) for w in out] == [("hello", 0.0), ("there", 0.5)]
+
+
+def test_caption_kept_for_a_word_that_starts_inside_a_cut():
+    keep = [(0.0, 2.0), (4.0, 10.0)]
+    words = [Word("late", 13.8, 14.6)]  # 3.8-4.6 in clip time: starts in the cut, ends after it
+    out = trim.remap_words(words, clip_start=10.0, keep=keep)
+    assert [(w.text, w.start, w.end) for w in out] == [("late", 2.0, 2.6)]
+
+
+def test_word_entirely_inside_a_cut_is_dropped():
+    keep = [(0.0, 2.0), (4.0, 10.0)]
+    assert trim.remap_words([Word("uh", 12.5, 13.0)], clip_start=10.0, keep=keep) == []
+
+
+@needs_ffmpeg
+def test_trimming_keeps_every_audio_track(tmp_path):
+    src = tmp_path / "two_tracks.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", "testsrc=duration=4:size=320x240:rate=30",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+        "-f", "lavfi", "-i", "sine=frequency=880:duration=4",
+        "-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "libx264", "-preset", "ultrafast", "-shortest", str(src),
+    ], check=True)
+    keep = [(0.0, 1.5), (2.5, 4.0)]
+    render.render_clip(src, [], 0, 4, tmp_path, "clip", layout="fit", keep=keep)
+    out = tmp_path / "clip.mp4"
+    tracks = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=duration",
+                             "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout.split()
+    assert len(tracks) == 2
+    assert all(abs(float(d) - 3.0) < 0.2 for d in tracks)
