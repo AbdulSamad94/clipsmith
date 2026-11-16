@@ -128,7 +128,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 - [ ] Keyword and emoji highlights in captions
 - [ ] Brand template (logo, fonts, colours)
 
-Contributions are welcome! **Designers especially:** UI/UX ideas are wanted, see the [UI/UX issue](https://github.com/AbdulSamad94/clipsmith/labels/design). See [CONTRIBUTING.md](CONTRIBUTING.md) and the [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue) label. If Clipsmith saves you money, a ⭐ helps other people find it.
+Contributions are welcome! **Designers especially:** UI/UX ideas are wanted, see [issue #24](https://github.com/AbdulSamad94/clipsmith/issues/24). See [CONTRIBUTING.md](CONTRIBUTING.md) and the [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue) label. If Clipsmith saves you money, a ⭐ helps other people find it.
 
 ## Use responsibly
 
