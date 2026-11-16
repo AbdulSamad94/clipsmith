@@ -80,7 +80,14 @@ class JobRequest(BaseModel):
     aspect: str = "9:16"
 
 
+_JOB_ID = re.compile(r"[0-9a-f]{10}")  # uuid4().hex[:10], see _new_job
+
+
 def _job_dir(job_id: str) -> Path:
+    """A job's folder. Job IDs come from URLs, so anything that isn't exactly a
+    generated ID is refused before it can become part of a file path."""
+    if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
+        raise ValueError("Not a valid job ID.")
     return config.JOBS_DIR / job_id
 
 
@@ -105,6 +112,8 @@ def _load_existing() -> None:
             job = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not _JOB_ID.fullmatch(str(job.get("id", ""))):
+            continue  # not a job this app created
         if job.get("status") in ("queued", "running"):
             job["status"] = "error"
             job["error"] = "The app was closed while this was processing."
