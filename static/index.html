@@ -189,7 +189,7 @@
         <select id="ytWhen"><option value="now">Post now</option><option value="later">Schedule</option></select></div>
     </div>
     <div id="ytLaterBox" hidden><label for="ytAt">Publish at (your local time)</label><input type="datetime-local" id="ytAt">
-      <div class="sub">YouTube publishes it at this time by itself; your computer doesn't need to be on. It stays private until then.</div></div>
+      <div class="sub">YouTube makes it public at this time by itself; your computer doesn't need to be on. It stays private until then.</div></div>
     <div><label>Audience (YouTube requires an answer)</label>
       <label class="opt"><input type="radio" name="ytKids" value="no" required> No, it's not made for kids</label>
       <label class="opt"><input type="radio" name="ytKids" value="yes"> Yes, it's made for kids</label></div>
@@ -314,6 +314,7 @@ function openPost(jobId, index) {
   $("#ytDesc").value = c.description || "";
   $("#ytTags").value = (c.hashtags || []).map((h) => "#" + h).join(" ");
   $("#ytPrivacy").value = "public";
+  $("#ytPrivacy").disabled = false;
   $("#ytWhen").value = "now";
   $("#ytLaterBox").hidden = true;
   const soon = new Date(Date.now() + 60 * 60 * 1000);
@@ -331,7 +332,13 @@ function openPost(jobId, index) {
 
 function updateCount() { $("#ytCount").textContent = `${$("#ytTitle").value.length}/100`; }
 $("#ytTitle").addEventListener("input", updateCount);
-$("#ytWhen").addEventListener("change", () => { $("#ytLaterBox").hidden = $("#ytWhen").value !== "later"; });
+$("#ytWhen").addEventListener("change", () => {
+  const later = $("#ytWhen").value === "later";
+  $("#ytLaterBox").hidden = !later;
+  // YouTube makes a scheduled video public at the chosen time, so scheduling means Public.
+  if (later) $("#ytPrivacy").value = "public";
+  $("#ytPrivacy").disabled = later;
+});
 $("#ytCancel").addEventListener("click", () => $("#ytdlg").close());
 
 $("#ytform").addEventListener("submit", async (e) => {

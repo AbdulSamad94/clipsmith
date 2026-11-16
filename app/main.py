@@ -16,10 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
@@ -27,6 +26,18 @@ from starlette.background import BackgroundTask
 from . import config, render, selector, source, youtube
 
 app = FastAPI(title="Clipsmith")
+
+
+@app.middleware("http")
+async def same_origin_only(request: Request, call_next):
+    """Refuse changes requested by other websites (CSRF). Browsers send an Origin
+    header on cross-site POST/DELETE; a page on another site must not be able to
+    delete videos, post clips or disconnect YouTube through this local app."""
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+            return JSONResponse({"detail": "Request from another website refused."}, status_code=403)
+    return await call_next(request)
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -352,6 +363,8 @@ def delete_job(job_id: str) -> dict:
             raise HTTPException(404, "Job not found.")
         if job["status"] in ("queued", "running"):
             raise HTTPException(409, "This video is still processing.")
+        if any((c.get("youtube") or {}).get("status") in ("queued", "uploading") for c in job.get("clips") or []):
+            raise HTTPException(409, "A clip from this video is being posted to YouTube. Wait for it to finish.")
         del _jobs[job_id]
     shutil.rmtree(_job_dir(job_id), ignore_errors=True)
     return {"ok": True}
@@ -463,7 +476,8 @@ app.mount("/media", StaticFiles(directory=config.JOBS_DIR), name="media")
 def index(state: str | None = None, code: str | None = None, error: str | None = None):
     # Google sends the browser back here after the YouTube sign-in.
     if error and state:
-        return RedirectResponse(f"/?youtube=error&reason={quote(error[:100])}", status_code=303)
+        reason = "access_denied" if error == "access_denied" else "failed"  # never echo the raw value
+        return RedirectResponse(f"/?youtube=error&reason={reason}", status_code=303)
     if state and code:
         try:
             youtube.finish_auth(state, code)

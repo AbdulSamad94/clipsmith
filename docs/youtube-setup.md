@@ -53,7 +53,7 @@ Restart Clipsmith (`run.bat` or `./run.sh`).
 
 Click **Post to YouTube** on any clip. The title, description and hashtags are pre-filled from the AI and you can edit them.
 
-- **Post now** or **Schedule**: a scheduled video is uploaded straight away as private, and **YouTube publishes it at the chosen time by itself**. Your computer doesn't need to be on.
+- **Post now** or **Schedule**: a scheduled video is uploaded straight away as private, and **YouTube makes it public at the chosen time by itself**. Your computer doesn't need to be on. Scheduled posts are always public; to keep a clip unlisted or private, post it now with that visibility.
 - **Made for kids**: YouTube requires an answer for every video.
 - **Add the full video link**: puts a link to the original video between the description and the hashtags (only for clips made from a YouTube link).
 - Vertical or square videos up to 3 minutes are treated as **Shorts** by YouTube automatically.

@@ -98,15 +98,24 @@ def build_metadata(
         raise ValueError("The title can't be empty.")
 
     tags = _tags(hashtags or [])
-    parts = [_clean(description)]
+    tail = []
     if source_url:
-        parts.append(f"Full video: {source_url}")  # between the caption and the hashtags
+        tail.append(f"Full video: {source_url}")  # between the caption and the hashtags
     if tags:
-        parts.append(" ".join("#" + t.replace(" ", "") for t in tags))
-    desc = _cut_bytes("\n\n".join(p for p in parts if p), 5000)
+        tail.append(" ".join("#" + t.replace(" ", "") for t in tags))
+    tail_text = "\n\n".join(tail)
+    # Trim the caption, not the link or hashtags, to fit YouTube's 5000-byte limit.
+    room = 5000 - len(tail_text.encode("utf-8")) - (2 if tail_text else 0)
+    caption = _cut_bytes(_clean(description), max(0, room))
+    desc = _cut_bytes("\n\n".join(p for p in (caption, tail_text) if p), 5000)
 
     status: dict = {"privacyStatus": privacy, "selfDeclaredMadeForKids": bool(made_for_kids)}
     if publish_at is not None:
+        # publishAt is the moment YouTube makes the video public, so a scheduled
+        # unlisted/private post would quietly go public: refuse instead.
+        if privacy != "public":
+            raise ValueError("Scheduled videos go public at the chosen time. Choose Public, "
+                             "or post now as unlisted or private.")
         if publish_at.tzinfo is None:
             raise ValueError("The schedule time needs a time zone.")
         now = now or datetime.now(timezone.utc)
@@ -197,13 +206,17 @@ def finish_auth(state: str, code: str) -> dict | None:
         channel = _fetch_channel(creds)
     except Exception:
         channel = None  # still connected; the channel name is only for display
-    data = json.loads(creds.to_json())
-    data["channel"] = channel
+    _save_token(json.loads(creds.to_json()), channel)
+    return channel
+
+
+def _save_token(data: dict, channel: dict | None) -> None:
+    """Write the login atomically, so a crash mid-write can't corrupt it."""
+    data = dict(data, channel=channel)
     TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = TOKEN_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(data), encoding="utf-8")
     tmp.replace(TOKEN_PATH)
-    return channel
 
 
 def _revoke(token: str) -> None:
@@ -239,9 +252,7 @@ def _service():
                 "YouTube sign-in has expired or was revoked. Reconnect YouTube. "
                 "(If this happens every week, set your Google app to 'In production'; see docs/youtube-setup.md.)"
             ) from exc
-        data = json.loads(creds.to_json())
-        data["channel"] = token.get("channel")
-        TOKEN_PATH.write_text(json.dumps(data), encoding="utf-8")
+        _save_token(json.loads(creds.to_json()), token.get("channel"))
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
