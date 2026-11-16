@@ -18,7 +18,7 @@ def client(monkeypatch):
     return c
 
 
-def _done_job(job_id="job1"):
+def _done_job(job_id="0000000001"):
     job = {
         "id": job_id, "url": "https://youtu.be/abc", "status": "done", "progress": 100, "message": "Done",
         "title": "Big video", "created": 1.0, "error": None, "warning": None, "options": {},
@@ -80,21 +80,21 @@ def test_disconnect(client, monkeypatch):
 def test_publish_requires_connection(client, monkeypatch):
     _connected(monkeypatch, yes=False)
     _done_job()
-    res = client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t"})
+    res = client.post("/api/jobs/0000000001/clips/0/youtube", json={"title": "t"})
     assert res.status_code == 409
 
 
 def test_publish_queues_upload_and_marks_clip(client, monkeypatch):
     _connected(monkeypatch)
     _done_job()
-    res = client.post("/api/jobs/job1/clips/0/youtube",
+    res = client.post("/api/jobs/0000000001/clips/0/youtube",
                       json={"title": "My title", "description": "d", "hashtags": ["fun"], "privacy": "unlisted",
                             "made_for_kids": False, "notify_subscribers": True, "add_source_link": True})
     assert res.status_code == 200
-    clip = main._jobs["job1"]["clips"][0]
+    clip = main._jobs["0000000001"]["clips"][0]
     assert clip["youtube"]["status"] == "queued"
     (job_id, index, meta, notify), = client.queued
-    assert (job_id, index, notify) == ("job1", 0, True)
+    assert (job_id, index, notify) == ("0000000001", 0, True)
     assert meta["snippet"]["title"] == "My title" and meta["status"]["privacyStatus"] == "unlisted"
     assert "Full video: https://youtu.be/abc" in meta["snippet"]["description"]
 
@@ -103,7 +103,7 @@ def test_publish_schedule(client, monkeypatch):
     _connected(monkeypatch)
     _done_job()
     when = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
-    res = client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t", "publish_at": when.isoformat()})
+    res = client.post("/api/jobs/0000000001/clips/0/youtube", json={"title": "t", "publish_at": when.isoformat()})
     assert res.status_code == 200
     (_, _, meta, _), = client.queued
     assert meta["status"]["privacyStatus"] == "private" and meta["status"]["publishAt"].endswith("Z")
@@ -118,52 +118,52 @@ def test_publish_schedule(client, monkeypatch):
 def test_publish_rejects_bad_input(client, monkeypatch, body, code):
     _connected(monkeypatch)
     _done_job()
-    assert client.post("/api/jobs/job1/clips/0/youtube", json=body).status_code == code
+    assert client.post("/api/jobs/0000000001/clips/0/youtube", json=body).status_code == code
     assert client.queued == []
 
 
 def test_publish_unknown_clip(client, monkeypatch):
     _connected(monkeypatch)
     _done_job()
-    assert client.post("/api/jobs/job1/clips/5/youtube", json={"title": "t"}).status_code == 404
-    assert client.post("/api/jobs/nope/clips/0/youtube", json={"title": "t"}).status_code == 404
+    assert client.post("/api/jobs/0000000001/clips/5/youtube", json={"title": "t"}).status_code == 404
+    assert client.post("/api/jobs/0000000099/clips/0/youtube", json={"title": "t"}).status_code == 404
 
 
 def test_cannot_post_the_same_clip_twice_at_once(client, monkeypatch):
     _connected(monkeypatch)
     _done_job()
-    assert client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t"}).status_code == 200
-    assert client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t"}).status_code == 409
+    assert client.post("/api/jobs/0000000001/clips/0/youtube", json={"title": "t"}).status_code == 200
+    assert client.post("/api/jobs/0000000001/clips/0/youtube", json={"title": "t"}).status_code == 409
 
 
 def test_upload_worker_records_result(client, monkeypatch):
     _done_job()
-    main._jobs["job1"]["clips"][0]["youtube"] = {"status": "queued"}
+    main._jobs["0000000001"]["clips"][0]["youtube"] = {"status": "queued"}
     monkeypatch.setattr(youtube, "upload", lambda path, meta, notify_subscribers, progress: progress(100) or "vid9")
-    main._publish("job1", 0, {"status": {"privacyStatus": "public"}}, True)
-    yt = main._jobs["job1"]["clips"][0]["youtube"]
+    main._publish("0000000001", 0, {"status": {"privacyStatus": "public"}}, True)
+    yt = main._jobs["0000000001"]["clips"][0]["youtube"]
     assert yt["status"] == "done" and yt["url"] == "https://youtu.be/vid9" and yt["video_id"] == "vid9"
 
 
 def test_upload_worker_records_error(client, monkeypatch):
     _done_job()
-    main._jobs["job1"]["clips"][0]["youtube"] = {"status": "queued"}
+    main._jobs["0000000001"]["clips"][0]["youtube"] = {"status": "queued"}
 
     def fail(*a, **k):
         raise youtube.UploadError("YouTube's daily limit of 100 uploads per day was reached.")
     monkeypatch.setattr(youtube, "upload", fail)
-    main._publish("job1", 0, {}, True)
-    yt = main._jobs["job1"]["clips"][0]["youtube"]
+    main._publish("0000000001", 0, {}, True)
+    yt = main._jobs["0000000001"]["clips"][0]["youtube"]
     assert yt["status"] == "error" and "100 uploads" in yt["error"]
 
 
 def test_interrupted_upload_is_marked_after_restart(tmp_path):
-    job = _done_job("job2")
+    job = _done_job("0000000002")
     job["clips"][0]["youtube"] = {"status": "uploading", "progress": 40}
     main._save(job)
     main._jobs.clear()
     main._load_existing()
-    yt = main._jobs["job2"]["clips"][0]["youtube"]
+    yt = main._jobs["0000000002"]["clips"][0]["youtube"]
     assert yt["status"] == "error" and "closed" in yt["error"]
 
 
@@ -172,24 +172,24 @@ def test_interrupted_upload_is_marked_after_restart(tmp_path):
 def test_cannot_remove_a_video_while_a_clip_is_posting(client, monkeypatch):
     _connected(monkeypatch)
     _done_job()
-    client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t"})
-    res = client.delete("/api/jobs/job1")
+    client.post("/api/jobs/0000000001/clips/0/youtube", json={"title": "t"})
+    res = client.delete("/api/jobs/0000000001")
     assert res.status_code == 409 and "YouTube" in res.json()["detail"]
-    assert "job1" in main._jobs
+    assert "0000000001" in main._jobs
 
 
 def test_schedule_with_unlisted_is_rejected(client, monkeypatch):
     _connected(monkeypatch)
     _done_job()
     when = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    res = client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t", "privacy": "unlisted", "publish_at": when})
+    res = client.post("/api/jobs/0000000001/clips/0/youtube", json={"title": "t", "privacy": "unlisted", "publish_at": when})
     assert res.status_code == 400
 
 
 @pytest.mark.parametrize("method, path", [
     ("post", "/api/youtube/disconnect"),
-    ("delete", "/api/jobs/job1"),
-    ("post", "/api/jobs/job1/clips/0/youtube"),
+    ("delete", "/api/jobs/0000000001"),
+    ("post", "/api/jobs/0000000001/clips/0/youtube"),
     ("post", "/api/jobs"),
 ])
 def test_requests_from_other_websites_are_refused(client, monkeypatch, method, path):
@@ -200,7 +200,7 @@ def test_requests_from_other_websites_are_refused(client, monkeypatch, method, p
     monkeypatch.setattr(youtube, "disconnect", lambda: disconnected.append(1))
     res = getattr(client, method)(path, headers={"Origin": "https://evil.example"})
     assert res.status_code == 403
-    assert disconnected == [] and "job1" in main._jobs
+    assert disconnected == [] and "0000000001" in main._jobs
 
 
 def test_same_origin_requests_still_work(client, monkeypatch):
