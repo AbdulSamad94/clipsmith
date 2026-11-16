@@ -15,6 +15,8 @@ sys.path.insert(0, str(ROOT))
 
 # Must be set before app.config is imported anywhere.
 os.environ["CLIPSMITH_DATA_DIR"] = tempfile.mkdtemp(prefix="clipsmith-test-")
+# FastAPI's TestClient sends "Host: testserver"; real use is 127.0.0.1/localhost only.
+os.environ["CLIPSMITH_ALLOWED_HOSTS"] = "testserver"
 
 from app.source import Word  # noqa: E402
 
