@@ -123,7 +123,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) and the [`good
 
 ## Use responsibly
 
-Only clip videos you own or have permission to reuse. Downloading from YouTube may break YouTube's Terms of Service, and re-uploading other people's content can get your channel struck. You are responsible for how you use this tool.
+Only post clips of videos you own, or that the creator allows you to clip (for example through a creator's clipping or affiliate program). Re-uploading other people's streams or videos without permission can lead to Content ID claims, copyright strikes, and monetization being refused under YouTube's reused-content policy. Downloading from YouTube may also break YouTube's Terms of Service. You are responsible for how you use this tool.
 
 ## License
 
