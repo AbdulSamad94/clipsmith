@@ -30,3 +30,19 @@ def test_loading_ignores_folders_with_bad_ids(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_jobs", {})
     main._load_existing()
     assert "../../evil" not in main._jobs
+
+
+def test_job_dir_stays_inside_the_jobs_folder():
+    """The path is resolved and checked to be inside JOBS_DIR (the pattern CodeQL
+    recognises for py/path-injection), on top of the ID format check."""
+    import os
+    path = main._job_dir("0123abcdef")
+    root = os.path.realpath(config.JOBS_DIR)
+    assert os.path.realpath(path).startswith(root + os.sep)
+
+
+def test_job_dir_refuses_paths_that_resolve_outside(monkeypatch):
+    # even if the ID pattern were ever loosened, a path outside JOBS_DIR is refused
+    monkeypatch.setattr(main, "_JOB_ID", __import__("re").compile(r".+"))
+    with pytest.raises(ValueError):
+        main._job_dir("../outside")
