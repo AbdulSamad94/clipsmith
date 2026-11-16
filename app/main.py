@@ -88,7 +88,12 @@ def _job_dir(job_id: str) -> Path:
     generated ID is refused before it can become part of a file path."""
     if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
         raise ValueError("Not a valid job ID.")
-    return config.JOBS_DIR / job_id
+    # Belt and braces: resolve the path and confirm it is still inside the jobs folder.
+    root = os.path.realpath(config.JOBS_DIR)
+    path = os.path.realpath(os.path.join(root, job_id))
+    if not path.startswith(root + os.sep):
+        raise ValueError("Not a valid job ID.")
+    return Path(path)
 
 
 def _save(job: dict) -> None:

@@ -13,7 +13,9 @@ def test_job_dir_refuses_anything_but_a_job_id(bad):
 
 
 def test_job_dir_accepts_real_ids():
-    assert main._job_dir("0123abcdef") == config.JOBS_DIR / "0123abcdef"
+    import os
+    # compared resolved: on Windows the temp folder may be a short (8.3) name
+    assert os.path.realpath(main._job_dir("0123abcdef")) == os.path.realpath(config.JOBS_DIR / "0123abcdef")
 
 
 @pytest.mark.parametrize("path", ["/api/jobs/..", "/api/jobs/%2E%2E", "/api/jobs/..%5Cdata"])
