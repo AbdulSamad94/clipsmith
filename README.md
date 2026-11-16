@@ -87,6 +87,10 @@ Then open **http://127.0.0.1:8765**, paste a YouTube link and click **Get clips*
 
 On a 4-core laptop CPU, a 12-minute video takes about **10 minutes**: a few minutes for the AI to read it, then about 1–3 minutes per clip to render. Longer videos take proportionally longer. Fewer clips means faster results.
 
+## Post straight to YouTube
+
+Connect your channel once and every clip gets a **Post to YouTube** button: the AI's title, description and hashtags are filled in, and you can post now or **schedule** it (YouTube publishes it at that time, even if your computer is off). Setup takes about 5 minutes with your own free Google app: see **[docs/youtube-setup.md](docs/youtube-setup.md)**.
+
 ## Choosing the AI
 
 Set this in `.env` (copy it from `.env.example`):
@@ -113,7 +117,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 - [ ] Edit clip start/end and caption text before export
 - [ ] Keyword and emoji highlights in captions
 - [ ] Brand template (logo, fonts, colours)
-- [ ] Post and schedule directly to YouTube
+- [x] Post and schedule directly to YouTube
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) and the [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue) label. If Clipsmith saves you money, a ⭐ helps other people find it.
 

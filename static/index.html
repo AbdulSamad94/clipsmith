@@ -83,13 +83,45 @@
   .cp { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
   .empty { text-align: center; color: var(--muted); margin-top: 60px; font-size: 14px; }
   @media (max-width: 560px) { .row { flex-direction: column; } .go { padding: 13px; } }
+  .hdr-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .ytbadge { font-size: 12.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; text-decoration: none; background: transparent; }
+  .ytbadge b { color: var(--text); font-weight: 600; }
+  a.ytbadge:hover, button.ytbadge:hover { color: var(--text); border-color: var(--muted); }
+  .ytbadge.on { border-color: #5b2a2a; }
+  .ytbadge .ytdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ff3b30; margin-right: 6px; }
+  .post { width: 100%; background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px 0; font-size: 13.5px; font-weight: 600; }
+  .post:hover { border-color: #ff3b30; }
+  .post:disabled { opacity: .5; cursor: default; }
+  .ytstat { font-size: 12.5px; color: var(--muted); min-height: 1px; }
+  .ytstat a { color: #7dd3fc; }
+  .ytstat.err { color: #fca5a5; }
+  .banner { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 10px 14px; font-size: 14px; margin-bottom: 10px; }
+  .banner.err { border-color: #5b2a2a; color: #fca5a5; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(560px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  .dlg { padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .dlg h3 { margin: 0; font-size: 17px; }
+  .dlg label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .dlg input[type=text], .dlg textarea, .dlg input[type=datetime-local] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; font: inherit; }
+  .dlg textarea { min-height: 90px; resize: vertical; }
+  .dlg .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .dlg .opt { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .dlg .opt input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .dlg .count { float: right; }
+  .dlg .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .dlg .btns button { padding: 9px 16px; font-weight: 600; }
+  .dlg .err { color: var(--bad); font-size: 13.5px; min-height: 1px; }
+  @media (max-width: 560px) { .dlg .two { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <div class="brand"><i></i>Clipsmith</div>
-    <div class="mode" id="mode"><span class="dot"></span>Checking…</div>
+    <div class="hdr-right">
+      <span id="yt"></span>
+      <div class="mode" id="mode"><span class="dot"></span>Checking…</div>
+    </div>
   </header>
 
   <div class="hero">
@@ -139,8 +171,34 @@
     <div class="formerr" id="formerr"></div>
   </form>
 
+  <div id="ytmsg"></div>
   <div id="jobs"></div>
 </div>
+
+<dialog id="ytdlg">
+  <form class="dlg" id="ytform" method="dialog">
+    <h3>Post to YouTube <span class="sub" id="ytchan"></span></h3>
+    <div><label for="ytTitle">Title <span class="count" id="ytCount">0/100</span></label>
+      <input type="text" id="ytTitle" maxlength="100" required></div>
+    <div><label for="ytDesc">Description</label><textarea id="ytDesc" maxlength="4500"></textarea></div>
+    <div><label for="ytTags">Hashtags (separated by spaces)</label><input type="text" id="ytTags" placeholder="#shorts #minecraft"></div>
+    <div class="two">
+      <div><label for="ytPrivacy">Visibility</label>
+        <select id="ytPrivacy"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></div>
+      <div><label for="ytWhen">When</label>
+        <select id="ytWhen"><option value="now">Post now</option><option value="later">Schedule</option></select></div>
+    </div>
+    <div id="ytLaterBox" hidden><label for="ytAt">Publish at (your local time)</label><input type="datetime-local" id="ytAt">
+      <div class="sub">YouTube makes it public at this time by itself; your computer doesn't need to be on. It stays private until then.</div></div>
+    <div><label>Audience (YouTube requires an answer)</label>
+      <label class="opt"><input type="radio" name="ytKids" value="no" required> No, it's not made for kids</label>
+      <label class="opt"><input type="radio" name="ytKids" value="yes"> Yes, it's made for kids</label></div>
+    <label class="opt"><input type="checkbox" id="ytNotify" checked> Notify subscribers</label>
+    <label class="opt" id="ytLinkRow"><input type="checkbox" id="ytLink"> Add the full video link to the description</label>
+    <div class="err" id="yterr"></div>
+    <div class="btns"><button type="button" class="ghost" id="ytCancel">Cancel</button><button type="submit" class="go" id="ytSubmit">Post</button></div>
+  </form>
+</dialog>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -169,22 +227,170 @@ async function init() {
     }
     $("#style").innerHTML = Object.entries(st.styles).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
   } catch (e) { $("#mode").textContent = "Server not reachable"; }
+  showConnectResult();
+  await loadYouTube();
   await refresh();
 }
+
+// ---------- YouTube ----------
+let yt = { configured: false, connected: false, channel: null };
+const SETUP_DOC = "https://github.com/AbdulSamad94/clipsmith/blob/main/docs/youtube-setup.md";
+
+async function loadYouTube() {
+  try { yt = await api("/api/youtube"); } catch { return; }
+  const el = $("#yt");
+  if (!yt.configured) {
+    el.innerHTML = `<a class="ytbadge" href="${SETUP_DOC}" target="_blank" rel="noopener"><span class="ytdot"></span>Set up YouTube posting</a>`;
+  } else if (!yt.connected) {
+    el.innerHTML = `<a class="ytbadge" href="/api/youtube/connect"><span class="ytdot"></span>Connect YouTube</a>`;
+  } else {
+    const name = yt.channel ? yt.channel.title : "connected";
+    el.innerHTML = `<span class="ytbadge on"><span class="ytdot"></span>YouTube: <b>${esc(name)}</b></span>
+      <button class="ytbadge" id="ytOff" type="button">Disconnect</button>`;
+    $("#ytOff").onclick = async () => {
+      if (!confirm("Disconnect YouTube? Clipsmith will no longer be able to post to your channel.")) return;
+      await api("/api/youtube/disconnect", { method: "POST" }).catch((e) => alert(e.message));
+      await loadYouTube();
+    };
+  }
+}
+
+function showConnectResult() {
+  const p = new URLSearchParams(location.search);
+  const r = p.get("youtube");
+  if (!r) return;
+  const why = p.get("reason");
+  $("#ytmsg").innerHTML = r === "connected"
+    ? `<div class="banner">YouTube connected. Use "Post to YouTube" on any clip.</div>`
+    : `<div class="banner err">YouTube wasn't connected${why === "access_denied" ? " (permission was declined)" : why === "expired" ? " (the sign-in link expired, try again)" : ""}.</div>`;
+  history.replaceState(null, "", location.pathname);
+}
+
+function ytStatusHtml(s) {
+  if (!s) return "";
+  if (s.status === "queued") return "Waiting to upload to YouTube…";
+  if (s.status === "uploading") return `Uploading to YouTube · ${s.progress || 0}%`;
+  if (s.status === "error") return `YouTube: ${esc(s.error)}`;
+  if (s.status === "done") {
+    const link = `<a href="${esc(s.url)}" target="_blank" rel="noopener">open on YouTube</a>`;
+    if (s.scheduled_for) return `Scheduled for ${esc(new Date(s.scheduled_for).toLocaleString())} · ${link}`;
+    return `Posted${s.privacy && s.privacy !== "public" ? ` (${esc(s.privacy)})` : ""} · ${link}`;
+  }
+  return "";
+}
+
+const ytBusy = (c) => c.youtube && (c.youtube.status === "queued" || c.youtube.status === "uploading");
+
+function updateYouTubeStatus() {
+  for (const j of jobs) {
+    (j.clips || []).forEach((c, i) => {
+      const st = jobsEl.querySelector(`[data-ytstat="${j.id}:${i}"]`);
+      if (st) {
+        st.innerHTML = ytStatusHtml(c.youtube);
+        st.classList.toggle("err", !!(c.youtube && c.youtube.status === "error"));
+      }
+      const btn = jobsEl.querySelector(`[data-post="${j.id}:${i}"]`);
+      if (btn) btn.disabled = ytBusy(c);
+    });
+  }
+}
+
+let posting = null; // { job, index }
+
+function openPost(jobId, index) {
+  const job = jobs.find((j) => j.id === jobId);
+  const c = job && job.clips[index];
+  if (!c) return;
+  if (!yt.connected) {
+    $("#ytmsg").innerHTML = yt.configured
+      ? `<div class="banner">Click <b>Connect YouTube</b> at the top first.</div>`
+      : `<div class="banner">YouTube posting isn't set up yet. <a href="${SETUP_DOC}" target="_blank" rel="noopener">Follow the 5-minute setup guide</a>.</div>`;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  posting = { job: jobId, index };
+  $("#ytchan").textContent = yt.channel ? `· ${yt.channel.title}` : "";
+  $("#ytTitle").value = (c.title || "").replace(/[<>]/g, "").slice(0, 100);
+  $("#ytDesc").value = c.description || "";
+  $("#ytTags").value = (c.hashtags || []).map((h) => "#" + h).join(" ");
+  $("#ytPrivacy").value = "public";
+  $("#ytPrivacy").disabled = false;
+  $("#ytWhen").value = "now";
+  $("#ytLaterBox").hidden = true;
+  const soon = new Date(Date.now() + 60 * 60 * 1000);
+  soon.setMinutes(0, 0, 0);
+  $("#ytAt").value = new Date(soon.getTime() - soon.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  document.querySelectorAll('input[name="ytKids"]').forEach((r) => (r.checked = false));
+  $("#ytNotify").checked = true;
+  const fromYouTube = /^https?:\/\/([\w-]+\.)?(youtube\.com|youtu\.be)\//i.test(job.url || "");
+  $("#ytLinkRow").hidden = !fromYouTube;
+  $("#ytLink").checked = false;
+  $("#yterr").textContent = "";
+  updateCount();
+  $("#ytdlg").showModal();
+}
+
+function updateCount() { $("#ytCount").textContent = `${$("#ytTitle").value.length}/100`; }
+$("#ytTitle").addEventListener("input", updateCount);
+$("#ytWhen").addEventListener("change", () => {
+  const later = $("#ytWhen").value === "later";
+  $("#ytLaterBox").hidden = !later;
+  // YouTube makes a scheduled video public at the chosen time, so scheduling means Public.
+  if (later) $("#ytPrivacy").value = "public";
+  $("#ytPrivacy").disabled = later;
+});
+$("#ytCancel").addEventListener("click", () => $("#ytdlg").close());
+
+$("#ytform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!posting) return;
+  const kids = document.querySelector('input[name="ytKids"]:checked');
+  if (!kids) { $("#yterr").textContent = "Choose whether the video is made for kids."; return; }
+  let publish_at = null;
+  if ($("#ytWhen").value === "later") {
+    const at = new Date($("#ytAt").value);
+    if (isNaN(at)) { $("#yterr").textContent = "Pick a date and time to publish."; return; }
+    if (at <= new Date()) { $("#yterr").textContent = "The publish time must be in the future."; return; }
+    publish_at = at.toISOString(); // UTC, e.g. 2026-11-16T13:30:00.000Z
+  }
+  const body = {
+    title: $("#ytTitle").value,
+    description: $("#ytDesc").value,
+    hashtags: $("#ytTags").value.split(/[\s,]+/).map((t) => t.replace(/^#+/, "")).filter(Boolean),
+    privacy: $("#ytPrivacy").value,
+    publish_at,
+    made_for_kids: kids.value === "yes",
+    notify_subscribers: $("#ytNotify").checked,
+    add_source_link: !$("#ytLinkRow").hidden && $("#ytLink").checked,
+  };
+  $("#ytSubmit").disabled = true;
+  try {
+    await api(`/api/jobs/${posting.job}/clips/${posting.index}/youtube`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    $("#ytdlg").close();
+    await refresh();
+  } catch (err) {
+    $("#yterr").textContent = err.message;
+  } finally {
+    $("#ytSubmit").disabled = false;
+  }
+});
 
 async function refresh() {
   try { jobs = await api("/api/jobs"); } catch { return; }
   render();
   const active = jobs.some((j) => j.status === "queued" || j.status === "running");
+  const uploading = jobs.some((j) => (j.clips || []).some(ytBusy));
   clearTimeout(timer);
-  if (active) timer = setTimeout(refresh, 1500);
+  if (active || uploading) timer = setTimeout(refresh, 1500);
   $("#go").disabled = active;
   $("#go").textContent = active ? "Working…" : "Get clips";
 }
 
 const scoreColor = (s) => (s >= 85 ? "var(--good)" : s >= 70 ? "var(--mid)" : "var(--low)");
 
-function clipCard(c) {
+function clipCard(c, jobId, i) {
   const tags = (c.hashtags || []).map((h) => "#" + h).join(" ");
   const copyText = [c.title, c.description, tags].filter(Boolean).join("\n\n");
   return `<div class="card">
@@ -201,6 +407,8 @@ function clipCard(c) {
         <a class="dl" href="${esc(c.video)}" download="${esc((c.title || "clip").replace(/[\\/:*?"<>|]+/g, "").slice(0, 60))}.mp4">Download</a>
         <button class="cp" data-copy="${esc(copyText)}">Copy caption</button>
       </div>
+      <button class="post" data-post="${esc(jobId)}:${i}" ${ytBusy(c) ? "disabled" : ""}>Post to YouTube</button>
+      <div class="ytstat${c.youtube && c.youtube.status === "error" ? " err" : ""}" data-ytstat="${esc(jobId)}:${i}">${ytStatusHtml(c.youtube)}</div>
     </div>
   </div>`;
 }
@@ -220,13 +428,14 @@ function jobBlock(j) {
     ${busy ? `<div class="bar"><div style="width:${j.progress}%"></div></div><div class="status">${esc(j.message)} · ${Math.round(j.progress)}%</div>` : ""}
     ${j.status === "error" ? `<div class="note err">${esc(j.error)}</div>` : ""}
     ${j.warning ? `<div class="note">${esc(j.warning)}</div>` : ""}
-    ${j.clips.length ? `<div class="grid">${j.clips.map(clipCard).join("")}</div>` : ""}
+    ${j.clips.length ? `<div class="grid">${j.clips.map((c, i) => clipCard(c, j.id, i)).join("")}</div>` : ""}
   </section>`;
 }
 
 function render() {
   // Don't rebuild a finished job's cards on every poll: it would restart any video that's playing.
   const sig = JSON.stringify(jobs.map((j) => [j.id, j.status, j.progress, j.message, j.clips.length, j.warning]));
+  updateYouTubeStatus(); // upload progress updates in place, without restarting playing videos
   if (sig === render.last) return;
   const structural = JSON.stringify(jobs.map((j) => [j.id, j.status, j.clips.length, j.warning]));
   if (structural === render.lastStructural) {
@@ -241,6 +450,7 @@ function render() {
     jobsEl.innerHTML = jobs.length
       ? jobs.map((j) => jobBlock(j).replace('<section class="job">', `<section class="job" data-job="${j.id}">`)).join("")
       : `<div class="empty">Your clips will show up here.</div>`;
+    updateYouTubeStatus();
   }
   render.last = sig;
   render.lastStructural = structural;
@@ -313,6 +523,12 @@ $("#form").addEventListener("submit", async (e) => {
 $("#file").addEventListener("change", () => { $("#url").required = !$("#file").files.length; });
 
 jobsEl.addEventListener("click", async (e) => {
+  const post = e.target.closest("[data-post]");
+  if (post) {
+    const [jobId, i] = post.dataset.post.split(":");
+    openPost(jobId, +i);
+    return;
+  }
   const cp = e.target.closest("[data-copy]");
   if (cp) {
     await navigator.clipboard.writeText(cp.dataset.copy).catch(() => {});
