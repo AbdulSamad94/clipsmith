@@ -32,7 +32,9 @@ Your app stays in **Testing** mode, and in Testing **only the Google accounts yo
 
 1. In the left menu, open **Audience**.
 2. Under **Test users**, click **Add users**.
-3. Enter the email address of the Google account that owns your YouTube channel, and click **Save**.
+3. Enter the email address of the Google account that owns your YouTube channel, and click **Save**. It then appears in the list under **User information**.
+
+   ![The Audience page in Google Auth Platform, with arrows pointing at "Audience" in the left menu and the "Add users" button under Test users](images/add-test-user.png)
 
 > **Testing mode signs you out every 7 days.** Google limits logins from Testing apps to 7 days, so once a week Clipsmith will say *"YouTube sign-in has expired"*. Click **Connect YouTube** again; it takes a few seconds. To avoid this, see [Optional: stay signed in](#optional-stay-signed-in-production-mode) below.
 
