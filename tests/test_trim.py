@@ -180,3 +180,20 @@ def test_pipeline_passes_the_trim_plan_to_the_renderer(monkeypatch, tmp_path, en
     assert done["status"] == "done", done.get("error")
     assert (seen.get("keep") is not None) is enabled
     assert done["clips"][0]["length"] == (30.5 if enabled else 40.0)  # the real, trimmed length
+
+
+def test_tiny_wordless_scraps_between_cuts_are_dropped(monkeypatch, tmp_path):
+    """Two silences 0.1 s apart leave a ~0.3 s scrap with no speech in it,
+    which would flash on screen between two jump cuts."""
+    monkeypatch.setattr(trim, "detect_silences", lambda *a: [(16.0, 17.2), (17.3, 19.1)])
+    words = [Word("hi", 1.0, 1.4), Word("there", 30.0, 30.4)]
+    keep = trim.plan(tmp_path / "v.mp4", words, 0, 40)
+    assert all(e - s >= 0.5 for s, e in keep)
+    assert keep == [(0.0, 16.15), (18.95, 40.0)]
+
+
+def test_short_pieces_with_speech_are_kept(monkeypatch, tmp_path):
+    monkeypatch.setattr(trim, "detect_silences", lambda *a: [(16.0, 17.2), (17.6, 19.1)])
+    words = [Word("yes", 17.25, 17.5)]
+    keep = trim.plan(tmp_path / "v.mp4", words, 0, 40)
+    assert any(s <= 17.25 <= e for s, e in keep)
