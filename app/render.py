@@ -298,6 +298,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 # ---------- encode ----------
 
+def _has_audio(video: Path) -> bool:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    return bool(out)
+
+
 def _probe_size(video: Path) -> tuple[int, int]:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
@@ -320,9 +328,12 @@ def render_clip(
     hook: str | None = None,
     aspect: str = DEFAULT_ASPECT,
     facecam: Box | None = None,
+    keep: list[tuple[float, float]] | None = None,
 ) -> dict:
     """Writes <name>.mp4 and <name>.jpg into out_dir. Returns what layout was used.
-    `facecam` skips detection (used by tests and by a forced split)."""
+    `facecam` skips detection (used by tests and by a forced split).
+    `keep`: parts of the clip to keep, in seconds from its start (see trim.py);
+    everything else (pauses, fillers) is cut and the captions re-timed."""
     clip_len = end - start
     W, H = ASPECTS.get(aspect, ASPECTS[DEFAULT_ASPECT])
     clip_words = [w for w in words if w.end > start and w.start < end]
@@ -354,8 +365,15 @@ def render_clip(
             elif keys is None:
                 keys = [(0.0, 0.5)]  # forced fill with no face: centre crop
 
+    from . import trim
+
+    if keep:
+        out_len = sum(e - s for s, e in keep)
+        cap_words, cap_start = trim.remap_words(clip_words, start, keep), 0.0
+    else:
+        out_len, cap_words, cap_start = clip_len, clip_words, start
     (out_dir / ass_name).write_text(
-        build_ass(clip_words, start, clip_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
+        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
         encoding="utf-8",
     )
 
@@ -384,10 +402,22 @@ def render_clip(
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,ass={ass_name}[v]"
         )
 
+    audio_map = "0:a?"
+    if keep:
+        # Cut after reframing (the crop's camera path uses the original clip time)
+        # and before the captions (which are already re-timed). fps=30 first gives
+        # a constant frame rate, so N/30 is the exact new timestamp.
+        expr = trim.select_expr(keep)
+        graph = graph.replace(f",ass={ass_name}[v]",
+                              f",fps=30,select='{expr}',setpts=N/30/TB,ass={ass_name}[v]")
+        if _has_audio(video):
+            graph += f";[0:a]aselect='{expr}',asetpts=N/SR/TB[a]"
+            audio_map = "[a]"
+
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-ss", f"{start:.3f}", "-t", f"{clip_len:.3f}", "-i", str(video),
-        "-filter_complex", graph, "-map", "[v]", "-map", "0:a?",
+        "-filter_complex", graph, "-map", "[v]", "-map", audio_map,
         "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", f"{name}.mp4",
     ]
@@ -398,9 +428,9 @@ def render_clip(
         raise RuntimeError(f"ffmpeg failed: {proc.stderr.strip()[-600:]}")
 
     subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{min(1.0, clip_len / 2):.2f}", "-i", f"{name}.mp4",
+        ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{min(1.0, out_len / 2):.2f}", "-i", f"{name}.mp4",
          "-frames:v", "1", "-vf", "scale=360:-2", f"{name}.jpg"],
         cwd=out_dir, capture_output=True,
     )
     (out_dir / ass_name).unlink(missing_ok=True)
-    return {"layout": used}
+    return {"layout": used, "length": round(out_len, 2)}
