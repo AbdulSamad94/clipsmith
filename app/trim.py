@@ -121,16 +121,19 @@ def remap(t: float, keep: list[tuple[float, float]]) -> float | None:
 
 
 def remap_words(words: list[Word], clip_start: float, keep: list[tuple[float, float]]) -> list[Word]:
-    """Words re-timed onto the shortened clip (times from its start); words
-    that fall in a cut are dropped."""
+    """Words re-timed onto the shortened clip (times from its start).
+
+    A word is judged by its whole span, not just its start: the part of it that
+    falls in kept footage is captioned (a word starting before the clip, or
+    inside a cut, still gets its caption where it's heard). Words entirely
+    inside a cut are dropped."""
     out = []
     for w in words:
-        s = remap(w.start - clip_start, keep)
-        e = remap(w.end - clip_start, keep)
-        if s is None:
+        a, b = w.start - clip_start, w.end - clip_start
+        parts = [(max(a, s), min(b, e)) for s, e in keep if a < e and b > s]
+        if not parts:
             continue
-        if e is None:  # the word runs into a cut: end it where the kept part ends
-            e = remap(next(ke for ks, ke in keep if ks <= w.start - clip_start <= ke), keep)
+        s, e = remap(parts[0][0], keep), remap(parts[-1][1], keep)
         out.append(Word(w.text, s, max(e, s + 0.05)))
     return out
 
@@ -147,9 +150,10 @@ def plan(video: Path, words: list[Word], start: float, end: float) -> list[tuple
     keep = keep_segments(clip_len, cuts, min_cut=0.0)
     # A scrap under MIN_KEEP between two cuts, with nobody speaking in it, would
     # only flash on screen between two jump cuts: drop it.
-    starts = [w.start - start for w in clip_words]
+    spans = [(w.start - start, w.end - start) for w in clip_words]
     keep = [(s, e) for s, e in keep
-            if e - s >= MIN_KEEP or s == 0.0 or e >= round(clip_len, 3) or any(s <= t <= e for t in starts)]
+            if e - s >= MIN_KEEP or s == 0.0 or e >= round(clip_len, 3)
+            or any(ws < e and we > s for ws, we in spans)]  # any word overlapping it, not just starting in it
     if keep == [(0.0, round(clip_len, 3))] or sum(e - s for s, e in keep) < 0.5 * clip_len:
         return None  # nothing to cut, or so much that it's probably a music/quiet clip: leave it alone
     return keep

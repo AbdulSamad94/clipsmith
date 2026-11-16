@@ -298,12 +298,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 # ---------- encode ----------
 
-def _has_audio(video: Path) -> bool:
+def _audio_tracks(video: Path) -> int:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(video)],
         capture_output=True, text=True,
-    ).stdout.strip()
-    return bool(out)
+    ).stdout.split()
+    return len(out)
 
 
 def _probe_size(video: Path) -> tuple[int, int]:
@@ -402,7 +402,7 @@ def render_clip(
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,ass={ass_name}[v]"
         )
 
-    audio_map = "0:a?"
+    audio_maps = ["0:a?"]
     if keep:
         # Cut after reframing (the crop's camera path uses the original clip time)
         # and before the captions (which are already re-timed). fps=30 first gives
@@ -410,14 +410,17 @@ def render_clip(
         expr = trim.select_expr(keep)
         graph = graph.replace(f",ass={ass_name}[v]",
                               f",fps=30,select='{expr}',setpts=N/30/TB,ass={ass_name}[v]")
-        if _has_audio(video):
-            graph += f";[0:a]aselect='{expr}',asetpts=N/SR/TB[a]"
-            audio_map = "[a]"
+        # Trim every audio track: "[0:a]" alone would pick only the first one,
+        # while the untrimmed path keeps them all.
+        tracks = _audio_tracks(video)
+        for i in range(tracks):
+            graph += f";[0:a:{i}]aselect='{expr}',asetpts=N/SR/TB[a{i}]"
+        audio_maps = [f"[a{i}]" for i in range(tracks)]
 
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-ss", f"{start:.3f}", "-t", f"{clip_len:.3f}", "-i", str(video),
-        "-filter_complex", graph, "-map", "[v]", "-map", audio_map,
+        "-filter_complex", graph, "-map", "[v]", *[x for m in audio_maps for x in ("-map", m)],
         "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", f"{name}.mp4",
     ]
