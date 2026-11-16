@@ -393,6 +393,14 @@
     .stats { order: 3; flex: 1 1 100%; } .stats div { flex: 1; }
     .job-actions { margin-left: auto; }
   }
+
+  /* Phone fixes: let the clip list shrink to the panel, keep the thumbnail beside the title. */
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .clip { min-width: 0; }
+  @media (max-width: 720px) {
+    .job-main { flex: 1 1 calc(100% - 60px); }
+    .job-thumb { width: 44px; height: 44px; }
+  }
 </style>
 </head>
 <body>
@@ -790,7 +798,7 @@ function openPost(jobId, index) {
     window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     return;
   }
-  posting = { job: jobId, index };
+  posting = { job: jobId, index, video: c.video };
   returnFocus = document.activeElement;
   $("#ytchan").textContent = yt.channel ? `· ${yt.channel.title}` : "";
   $("#ytTitle").value = (c.title || "").replace(/[<>]/g, "").slice(0, 100);
@@ -846,6 +854,7 @@ $("#ytform").addEventListener("submit", async (e) => {
     made_for_kids: kids.value === "yes",
     notify_subscribers: $("#ytNotify").checked,
     add_source_link: !$("#ytLinkRow").hidden && $("#ytLink").checked,
+    clip_video: posting.video, // lets the server refuse if this position now holds another clip
   };
   $("#ytSubmit").disabled = true;
   try {
@@ -1043,6 +1052,25 @@ function toggleJob(id) {
 
 const announceStage = {};
 
+// Tell screen readers when a video finishes or fails. Those changes rebuild the list,
+// so the step announcements in render() don't cover them. Statuses seen on first load
+// are only recorded, not announced.
+const lastStatus = {};
+function announceFinished() {
+  for (const j of jobs) {
+    const before = lastStatus[j.id];
+    lastStatus[j.id] = j.status;
+    if (before === undefined || before === j.status) continue;
+    const name = j.title || j.upload || "your video";
+    if (j.status === "done") {
+      const n = j.clips.length;
+      announce(`Finished: ${n} clip${n === 1 ? "" : "s"} ready from ${name}.`);
+    } else if (j.status === "error") {
+      announce(`Couldn't make clips from ${name}. ${j.error || ""}`);
+    }
+  }
+}
+
 function render() {
   // Don't rebuild a finished job's cards on every poll: it would restart any video that's playing.
   const sig = JSON.stringify(jobs.map((j) => [j.id, j.status, j.progress, j.message, j.clips.length, j.warning]));
@@ -1070,6 +1098,7 @@ function render() {
   }
   render.last = sig;
   render.lastStructural = structural;
+  announceFinished();
 }
 
 // "1:05", "12:30" or "1:02:03" to seconds; empty means no limit (null).

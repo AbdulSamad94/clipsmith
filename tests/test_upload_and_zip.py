@@ -130,3 +130,19 @@ def test_zip_is_not_left_on_disk(client):
     job_id = _finished_job(client)
     assert client.get(f"/api/jobs/{job_id}/zip").status_code == 200
     assert not list(main._job_dir(job_id).glob("*.zip*"))
+
+
+def test_zip_skips_a_clip_deleted_while_zipping(client, monkeypatch):
+    # a clip can be deleted from another tab while "Download all" is still building the zip
+    job_id = _finished_job(client)
+    real_write = zipfile.ZipFile.write
+
+    def write_then_delete_next(self, filename, *a, **kw):
+        real_write(self, filename, *a, **kw)
+        (main._job_dir(job_id) / "clip_02.mp4").unlink(missing_ok=True)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", write_then_delete_next)
+    res = client.get(f"/api/jobs/{job_id}/zip")
+    assert res.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+        assert z.namelist() == ["clip_01.mp4"]

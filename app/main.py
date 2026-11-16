@@ -355,10 +355,12 @@ async def upload_job(
 def download_zip(job_id: str) -> FileResponse:
     with _lock:
         job = _jobs.get(job_id)
+        # Copy the list: a clip can be deleted while the zip is being built.
+        clips = list(job.get("clips") or []) if job else []
     if not job:
         raise HTTPException(404, "Job not found.")
     d = _job_dir(job_id)
-    files = [d / Path(c["video"]).name for c in job.get("clips") or []]
+    files = [d / Path(c["video"]).name for c in clips]
     files = [f for f in files if f.is_file()]
     if not files:
         raise HTTPException(409, "This video has no finished clips yet.")
@@ -369,7 +371,10 @@ def download_zip(job_id: str) -> FileResponse:
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
             for f in files:
-                z.write(f, f.name)
+                try:
+                    z.write(f, f.name)
+                except FileNotFoundError:
+                    continue  # deleted from another tab while zipping
     except BaseException:
         os.unlink(tmp)
         raise
@@ -442,6 +447,9 @@ class PublishRequest(BaseModel):
     made_for_kids: bool = False
     notify_subscribers: bool = True
     add_source_link: bool = False
+    # The clip's video path when the dialog opened. Clips are addressed by position, so if one
+    # was deleted meanwhile this catches a post landing on a different clip.
+    clip_video: str | None = None
 
 
 @app.get("/api/youtube")
@@ -476,6 +484,8 @@ def publish_clip(job_id: str, index: int, req: PublishRequest) -> dict:
         if not job or not 0 <= index < len(clips):
             raise HTTPException(404, "Clip not found.")
         clip = clips[index]
+        if req.clip_video is not None and req.clip_video != clip.get("video"):
+            raise HTTPException(409, "This clip changed since you opened it (another clip was deleted). Reload the page and try again.")
         if (clip.get("youtube") or {}).get("status") in ("queued", "uploading"):
             raise HTTPException(409, "This clip is already being posted.")
         source_url = job.get("url") if req.add_source_link and _YT.match(job.get("url") or "") else None
