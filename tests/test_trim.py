@@ -127,3 +127,56 @@ def test_real_clip_loses_its_silence_and_stays_in_sync(tmp_path):
     expected = sum(e - s for s, e in keep)  # about 4.3 s instead of 6
     assert abs(v - expected) < 0.2 and abs(a - expected) < 0.2
     assert abs(v - a) < 0.1  # picture and sound stay in sync
+
+
+# ---------- option and pipeline ----------
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app import main, source  # noqa: E402
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setattr(main._pool, "submit", lambda *a: None)
+    monkeypatch.setattr(main, "_jobs", {})
+    return TestClient(main.app)
+
+
+def test_trim_is_on_by_default_and_can_be_turned_off(client):
+    on = client.post("/api/jobs", json={"url": "https://youtu.be/x"}).json()
+    off = client.post("/api/jobs", json={"url": "https://youtu.be/x", "trim_pauses": False}).json()
+    assert on["options"]["trim_pauses"] is True and off["options"]["trim_pauses"] is False
+
+
+def _fake_pipeline(monkeypatch, tmp_path):
+    video = tmp_path / "source.mp4"
+    video.write_bytes(b"x")
+    words = [Word(f"w{i}.", i * 1.0, i * 1.0 + 0.5) for i in range(120)]
+    src = source.Source(video, "T", 120.0, "en", words, "youtube-captions")
+    monkeypatch.setattr(source, "download", lambda *a, **k: src)
+    from app import selector
+    clip = selector.Clip(10.0, 50.0, "t", "", 80, "r", "d", [])
+    monkeypatch.setattr(selector, "select", lambda *a, **k: ([clip], "basic", None))
+    seen = {}
+
+    def fake_render(*a, **k):
+        seen.update(k)
+        return {"layout": "fit", "length": 30.5 if k.get("keep") else 40.0}
+
+    monkeypatch.setattr(render, "render_clip", fake_render)
+    monkeypatch.setattr(trim, "plan", lambda *a, **k: [(0.0, 10.0), (19.5, 40.0)])
+    return seen
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_pipeline_passes_the_trim_plan_to_the_renderer(monkeypatch, tmp_path, enabled):
+    seen = _fake_pipeline(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "_jobs", {})
+    req = main.JobRequest(url="https://youtu.be/x", trim_pauses=enabled)
+    job = main._new_job(req, "00000000aa")
+    main._run(job["id"], req)
+    done = main._jobs["00000000aa"]
+    assert done["status"] == "done", done.get("error")
+    assert (seen.get("keep") is not None) is enabled
+    assert done["clips"][0]["length"] == (30.5 if enabled else 40.0)  # the real, trimmed length
