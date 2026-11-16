@@ -28,11 +28,30 @@ from . import config, render, selector, source, youtube
 app = FastAPI(title="Clipsmith")
 
 
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"} | {
+    h.strip().lower() for h in os.environ.get("CLIPSMITH_ALLOWED_HOSTS", "").split(",") if h.strip()
+}
+
+
+def _hostname(host_header: str) -> str:
+    host = host_header.strip().lower()
+    if host.startswith("["):  # [::1]:8765
+        return host[1:host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
 @app.middleware("http")
 async def same_origin_only(request: Request, call_next):
-    """Refuse changes requested by other websites (CSRF). Browsers send an Origin
-    header on cross-site POST/DELETE; a page on another site must not be able to
-    delete videos, post clips or disconnect YouTube through this local app."""
+    """Only this computer's own web pages may use the app.
+
+    - Host check (DNS rebinding): a site can point its own name at 127.0.0.1,
+      making its requests look same-origin. Requests not addressed to
+      127.0.0.1 / localhost are refused, reads included.
+    - Origin check (CSRF): browsers send Origin on cross-site POST/DELETE; a
+      page on another site must not delete videos, post clips or disconnect
+      YouTube. Extra hostnames can be allowed with CLIPSMITH_ALLOWED_HOSTS."""
+    if _hostname(request.headers.get("host", "")) not in _LOCAL_HOSTS:
+        return JSONResponse({"detail": "Open Clipsmith at http://127.0.0.1:8765."}, status_code=403)
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
         if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
