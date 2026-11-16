@@ -165,3 +165,54 @@ def test_interrupted_upload_is_marked_after_restart(tmp_path):
     main._load_existing()
     yt = main._jobs["job2"]["clips"][0]["youtube"]
     assert yt["status"] == "error" and "closed" in yt["error"]
+
+
+# ---------- review fixes ----------
+
+def test_cannot_remove_a_video_while_a_clip_is_posting(client, monkeypatch):
+    _connected(monkeypatch)
+    _done_job()
+    client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t"})
+    res = client.delete("/api/jobs/job1")
+    assert res.status_code == 409 and "YouTube" in res.json()["detail"]
+    assert "job1" in main._jobs
+
+
+def test_schedule_with_unlisted_is_rejected(client, monkeypatch):
+    _connected(monkeypatch)
+    _done_job()
+    when = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    res = client.post("/api/jobs/job1/clips/0/youtube", json={"title": "t", "privacy": "unlisted", "publish_at": when})
+    assert res.status_code == 400
+
+
+@pytest.mark.parametrize("method, path", [
+    ("post", "/api/youtube/disconnect"),
+    ("delete", "/api/jobs/job1"),
+    ("post", "/api/jobs/job1/clips/0/youtube"),
+    ("post", "/api/jobs"),
+])
+def test_requests_from_other_websites_are_refused(client, monkeypatch, method, path):
+    """A page on another site can't make the browser change anything here (CSRF)."""
+    _connected(monkeypatch)
+    _done_job()
+    disconnected = []
+    monkeypatch.setattr(youtube, "disconnect", lambda: disconnected.append(1))
+    res = getattr(client, method)(path, headers={"Origin": "https://evil.example"})
+    assert res.status_code == 403
+    assert disconnected == [] and "job1" in main._jobs
+
+
+def test_same_origin_requests_still_work(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(youtube, "disconnect", lambda: calls.append(1))
+    res = client.post("/api/youtube/disconnect", headers={"Origin": "http://testserver"})
+    assert res.status_code == 200 and calls
+
+
+def test_sign_in_error_redirect_uses_a_fixed_reason(client):
+    res = client.get("/?error=//evil.example/%0Ax&state=s1")
+    assert res.status_code == 303
+    assert res.headers["location"] in ("/?youtube=error&reason=failed", "/?youtube=error&reason=access_denied")
+    res = client.get("/?error=access_denied&state=s1")
+    assert res.headers["location"] == "/?youtube=error&reason=access_denied"

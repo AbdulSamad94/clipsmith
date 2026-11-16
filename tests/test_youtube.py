@@ -239,3 +239,30 @@ def test_upload_errors_are_explained(tmp_path, code, reason, words):
     req = FakeRequest([_http_error(code, reason)])
     with pytest.raises(youtube.UploadError, match=words):
         youtube.upload(_clip(tmp_path), {}, service=FakeService(req), sleep=lambda s: None)
+
+
+# ---------- review fixes ----------
+
+def test_scheduled_video_must_be_public():
+    """publishAt is the time YouTube makes the video public, so a schedule with
+    unlisted/private would silently become public: refuse it."""
+    for privacy in ("unlisted", "private"):
+        with pytest.raises(ValueError, match="public"):
+            youtube.build_metadata(title="t", description="", privacy=privacy,
+                                   publish_at=NOW + timedelta(days=1), now=NOW)
+
+
+def test_long_description_keeps_the_link_and_hashtags():
+    meta = youtube.build_metadata(title="t", description="é" * 4000, hashtags=["fun", "shorts"],
+                                  source_url="https://youtu.be/abc", now=NOW)
+    desc = meta["snippet"]["description"]
+    assert len(desc.encode("utf-8")) <= 5000
+    assert "Full video: https://youtu.be/abc" in desc and desc.endswith("#fun #shorts")
+
+
+def test_token_refresh_is_saved_atomically(yt_env, monkeypatch):
+    youtube.TOKEN_PATH.write_text(json.dumps({"token": "old", "refresh_token": "r", "channel": {"title": "C"}}))
+    youtube._save_token({"token": "new", "refresh_token": "r"}, channel={"title": "C"})
+    saved = json.loads(youtube.TOKEN_PATH.read_text())
+    assert saved["token"] == "new" and saved["channel"] == {"title": "C"}
+    assert not list(youtube.TOKEN_PATH.parent.glob("*.tmp"))
