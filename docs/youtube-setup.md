@@ -75,6 +75,8 @@ Click **Post to YouTube** on any clip. The title, description and hashtags are p
 - **Add the full video link**: puts a link to the original video between the description and the hashtags (only for clips made from a YouTube link).
 - Vertical or square videos up to 3 minutes are treated as **Shorts** by YouTube automatically.
 
+While a clip uploads, an **uploads tray** in the bottom-right corner shows its progress (minimize it with the arrow). Keep Clipsmith open until it finishes. Once a clip is posted, its card folds into one line with an **Open on YouTube** link; use the arrow to open it again. To post the same clip again, use the **⋯** menu on the clip. If an upload fails, the clip shows the reason and a **Try again** button.
+
 ## Limits
 
 - Google allows **100 uploads per day** per Google Cloud project.

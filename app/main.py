@@ -408,6 +408,29 @@ def delete_job(job_id: str) -> dict:
     return {"ok": True}
 
 
+@app.delete("/api/jobs/{job_id}/clips/{index}")
+def delete_clip(job_id: str, index: int) -> dict:
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found.")
+        clips = job.get("clips") or []
+        if not 0 <= index < len(clips):
+            raise HTTPException(404, "Clip not found.")
+        if job["status"] in ("queued", "running"):
+            raise HTTPException(409, "This video is still processing.")
+        # Uploads find their clip by position, so removing one would point them at the wrong clip.
+        if any((c.get("youtube") or {}).get("status") in ("queued", "uploading") for c in clips):
+            raise HTTPException(409, "A clip from this video is being posted to YouTube. Wait for it to finish.")
+        clip = clips.pop(index)
+        _save(job)
+    d = _job_dir(job_id)
+    for url in (clip.get("video"), clip.get("thumb")):
+        if url:
+            (d / Path(url).name).unlink(missing_ok=True)
+    return {"ok": True}
+
+
 # ---------- YouTube ----------
 
 class PublishRequest(BaseModel):
