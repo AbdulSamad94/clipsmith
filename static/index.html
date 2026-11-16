@@ -161,6 +161,7 @@
           <option value="16:9">16:9 Landscape</option>
         </select></div>
       <label class="check"><input type="checkbox" id="hook" checked>Hook text at the start</label>
+      <label class="check"><input type="checkbox" id="trim" checked>Remove pauses and "uh"/"um"</label>
     </div>
     <div class="focus">
       <div><label for="prompt">What should the clips be about? (optional)</label>
@@ -483,7 +484,7 @@ $("#form").addEventListener("submit", async (e) => {
       fd.append("file", file);
       for (const [k, v] of Object.entries({
         clip_count: $("#count").value, min_len, max_len,
-        style: $("#style").value, layout: $("#layout").value, aspect: $("#aspect").value, hook: $("#hook").checked,
+        style: $("#style").value, layout: $("#layout").value, aspect: $("#aspect").value, hook: $("#hook").checked, trim_pauses: $("#trim").checked,
         prompt: $("#prompt").value.trim(), start_time, end_time,
       })) if (v !== null && v !== undefined) fd.append(k, v);
       $("#go").disabled = true;
@@ -511,7 +512,7 @@ $("#form").addEventListener("submit", async (e) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: $("#url").value.trim(), clip_count: +$("#count").value, min_len, max_len,
-        style: $("#style").value, layout: $("#layout").value, aspect: $("#aspect").value, hook: $("#hook").checked,
+        style: $("#style").value, layout: $("#layout").value, aspect: $("#aspect").value, hook: $("#hook").checked, trim_pauses: $("#trim").checked,
         prompt: $("#prompt").value.trim(), start_time, end_time,
       }),
     });

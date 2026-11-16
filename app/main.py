@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
-from . import config, render, selector, source, youtube
+from . import config, render, selector, source, trim, youtube
 
 app = FastAPI(title="Clipsmith")
 
@@ -78,6 +78,7 @@ class JobRequest(BaseModel):
     start_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     end_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     aspect: str = "9:16"
+    trim_pauses: bool = True
 
 
 _JOB_ID = re.compile(r"[0-9a-f]{10}")  # uuid4().hex[:10], see _new_job
@@ -224,16 +225,18 @@ def _run(job_id: str, req: JobRequest) -> None:
                 clip.start, clip.end, src.words, src.duration, req.start_time, req.end_time
             )
             name = f"clip_{i + 1:02d}"
+            keep = trim.plan(src.video_path, src.words, start, end) if req.trim_pauses else None
             info = render.render_clip(
                 src.video_path, src.words, start, end, workdir, name,
                 style=req.style, layout=req.layout, hook=clip.hook if req.hook else None, aspect=req.aspect,
+                keep=keep,
             )
             done.append(
                 asdict(clip)
                 | {
                     "start": round(start, 2),
                     "end": round(end, 2),
-                    "length": round(end - start, 1),
+                    "length": round(info.get("length", end - start), 1),
                     "video": f"/media/{job_id}/{name}.mp4",
                     "thumb": f"/media/{job_id}/{name}.jpg",
                     "layout": info["layout"],
@@ -317,6 +320,7 @@ async def upload_job(
     start_time: float | None = Form(None),
     end_time: float | None = Form(None),
     aspect: str = Form("9:16"),
+    trim_pauses: bool = Form(True),
 ) -> dict:
     name = Path(file.filename or "").name
     ext = Path(name).suffix.lower()
@@ -325,7 +329,8 @@ async def upload_job(
     try:
         req = JobRequest(url="", clip_count=clip_count, min_len=min_len, max_len=max_len,
                          style=style, layout=layout, hook=hook,
-                         prompt=prompt, start_time=start_time, end_time=end_time, aspect=aspect)
+                         prompt=prompt, start_time=start_time, end_time=end_time, aspect=aspect,
+                         trim_pauses=trim_pauses)
     except ValidationError as exc:
         raise HTTPException(422, str(exc)) from None
     _check_options(req)
