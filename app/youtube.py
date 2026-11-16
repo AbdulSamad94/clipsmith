@@ -249,8 +249,8 @@ def _service():
             creds.refresh(Request())
         except Exception as exc:
             raise UploadError(
-                "YouTube sign-in has expired or was revoked. Reconnect YouTube. "
-                "(If this happens every week, set your Google app to 'In production'; see docs/youtube-setup.md.)"
+                "YouTube sign-in has expired or was revoked. Reconnect YouTube (click Connect YouTube at the top). "
+                "Google signs Testing-mode apps out every 7 days; see docs/youtube-setup.md."
             ) from exc
         _save_token(json.loads(creds.to_json()), token.get("channel"))
     return build("youtube", "v3", credentials=creds, cache_discovery=False)

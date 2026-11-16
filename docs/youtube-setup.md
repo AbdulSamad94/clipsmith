@@ -14,22 +14,37 @@ Nothing secret is shipped with Clipsmith: your keys stay in your `.env` file, an
 1. Open the [API Library](https://console.cloud.google.com/apis/library).
 2. Search for **YouTube Data API v3** and click **Enable**.
 
+After enabling it, Google opens the API's details page.
+
 ## 3. Set up the consent screen
 
-1. Go to **Menu → Google Auth platform → Branding** and fill in an app name (e.g. `Clipsmith`) and your email.
-2. Under **Audience**, choose **External**.
-3. **Important:** on the **Audience** page, click **Publish app** so the status is **In production**.
-   > If you leave it in **Testing**, Google makes your YouTube login expire **every 7 days** and you'd have to reconnect each week.
+1. In the left menu, click **OAuth consent screen**:
+
+   ![The YouTube Data API v3 details page, with an arrow pointing at "OAuth consent screen" in the left menu](images/youtube-consent-screen-link.png)
+
+2. Enter an app name (e.g. `Clipsmith`) and your email address.
+3. For the audience, choose **External**.
+4. Finish the setup with the default options.
+
+## 4. Add yourself as a test user (required)
+
+Your app stays in **Testing** mode, and in Testing **only the Google accounts you list can sign in**. Anyone else gets *"Access blocked: … has not completed the Google verification process"* (Error 403: access_denied).
+
+1. In the left menu, open **Audience**.
+2. Under **Test users**, click **Add users**.
+3. Enter the email address of the Google account that owns your YouTube channel, and click **Save**.
+
+> **Testing mode signs you out every 7 days.** Google limits logins from Testing apps to 7 days, so once a week Clipsmith will say *"YouTube sign-in has expired"*. Click **Connect YouTube** again; it takes a few seconds. To avoid this, see [Optional: stay signed in](#optional-stay-signed-in-production-mode) below.
 
 You don't need Google's app verification: apps for personal use with fewer than 100 users can be used without it.
 
-## 4. Create the OAuth client
+## 5. Create the OAuth client
 
 1. Go to **Menu → Google Auth platform → Clients** and click **Create Client**.
 2. **Application type:** **Desktop app**. Name it anything and click **Create**.
 3. Copy the **Client ID** and **Client secret**.
 
-## 5. Add them to Clipsmith
+## 6. Add them to Clipsmith
 
 Open the `.env` file in the Clipsmith folder and add:
 
@@ -40,10 +55,10 @@ YOUTUBE_CLIENT_SECRET=your-client-secret
 
 Restart Clipsmith (`run.bat` or `./run.sh`).
 
-## 6. Connect your channel
+## 7. Connect your channel
 
 1. Click **Connect YouTube** at the top of the Clipsmith page.
-2. Choose your Google account. Google shows **"Google hasn't verified this app"**. That's expected for your own personal app: click **Advanced → Go to Clipsmith (unsafe)**. It's "unsafe" only in the sense that Google hasn't reviewed it; it's your own app.
+2. Choose the Google account you added as a test user in step 4. Google shows **"Google hasn't verified this app"**. That's expected for your own personal app: click **Advanced → Go to Clipsmith (unsafe)**. It's "unsafe" only in the sense that Google hasn't reviewed it; it's your own app.
 3. Allow the permissions:
    - **Upload YouTube videos** (`youtube.upload`) to post clips.
    - **View your YouTube account** (`youtube.readonly`) so Clipsmith can show which channel is connected.
@@ -68,11 +83,23 @@ Click **Post to YouTube** on any clip. The title, description and hashtags are p
 
 Click **Disconnect** at the top. Clipsmith revokes its access with Google and deletes the saved login. You can also remove access any time at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
 
+## Optional: stay signed in (production mode)
+
+Switching the app from **Testing** to **In production** removes the 7-day sign-out. Google only allows the switch once the app's **Branding** page has a valid app name, support email, **homepage URL** and **privacy policy URL**. Without them, Google shows *"Valid app name, support email, homepage url, and privacy policy url are required for switching the app to external production mode."*
+
+If you have those URLs:
+1. Fill them in on the **Branding** page.
+2. On the **Audience** page, click **Publish app**.
+3. In Clipsmith, click **Disconnect**, then **Connect YouTube** again.
+
+If you don't, stay in Testing and reconnect once a week.
+
 ## Troubleshooting
 
 | Message | Fix |
 |---|---|
 | "YouTube isn't set up yet" | Add `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET` to `.env` and restart. |
-| Login expires every week | Your app is in **Testing**. Click **Publish app** (step 3) and reconnect. |
+| "Access blocked: … has not completed the Google verification process" (Error 403: access_denied) | Add your Google account as a **test user** (step 4), then connect again. |
+| "YouTube sign-in has expired", once a week | Normal in Testing mode: click **Connect YouTube** again. To stop it, see [production mode](#optional-stay-signed-in-production-mode). |
 | "daily limit of 100 uploads" | Wait until tomorrow (the quota resets daily). |
 | `redirect_uri_mismatch` | Make sure the OAuth client type is **Desktop app**, not Web application, and open Clipsmith at `http://127.0.0.1:8765`. |
