@@ -18,7 +18,9 @@ def client(monkeypatch):
 
 def test_status_reports_styles(client):
     data = client.get("/api/status").json()
-    assert set(data["styles"]) == {"yellow", "green", "clean"}
+    assert set(data["styles"]) == {"yellow", "green", "beast", "anton", "bebas", "clean", "reveal"}
+    look = data["style_looks"]["yellow"]
+    assert look["font"] == "Arial Black" and look["upper"] is True and look["active"].startswith("#")
     assert "missing" in data
 
 

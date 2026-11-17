@@ -186,7 +186,12 @@ def parse_json3(path: Path) -> list[Word]:
         ev_start = ev.get("tStartMs", 0) / 1000
         ev_end = ev_start + ev.get("dDurationMs", 0) / 1000
         timed = any("tOffsetMs" in s for s in segs[1:])
-        if timed or len(segs) > 1:
+        if not timed:
+            # Manual captions: the whole line, possibly split over several segs
+            # with no offsets. Joined and spread evenly below; giving every word
+            # the line's start time made them zero-length, so they were skipped.
+            segs = [{"utf8": " ".join(s.get("utf8", "") for s in segs)}]
+        if timed:
             for s in segs:
                 tok = _clean(s.get("utf8", ""))
                 if not tok:
