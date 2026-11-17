@@ -107,7 +107,7 @@ def test_manual_caption_split_over_segs_spreads_words(tmp_path):
         {"tStartMs": 1000, "dDurationMs": 2000, "segs": [{"utf8": "- Joe's dish"}, {"utf8": " is a hot,"}]},
     ]}), encoding="utf-8")
     words = parse_json3(f)
-    assert [w.text for w in words] == ["-", "Joe's", "dish", "is", "a", "hot,"]
+    assert [w.text for w in words] == ["Joe's", "dish", "is", "a", "hot,"]  # speaker dash dropped
     starts = [w.start for w in words]
     assert len(set(starts)) == len(starts)  # every word has its own time
     assert all(w.end - w.start >= 0.2 for w in words)
@@ -120,3 +120,12 @@ def test_manual_caption_drops_multi_word_noise_tag_in_its_own_seg(tmp_path):
         {"tStartMs": 0, "dDurationMs": 2000, "segs": [{"utf8": "[Music playing]"}, {"utf8": " welcome back"}]},
     ]}), encoding="utf-8")
     assert [w.text for w in parse_json3(f)] == ["welcome", "back"]
+
+
+def test_speaker_change_dashes_are_not_caption_words(tmp_path):
+    from app.source import parse_json3
+    f = tmp_path / "c.json3"
+    f.write_text(json.dumps({"events": [
+        {"tStartMs": 0, "dDurationMs": 2000, "segs": [{"utf8": "- Joe, – yes chef - well-done"}]},
+    ]}), encoding="utf-8")
+    assert [w.text for w in parse_json3(f)] == ["Joe,", "yes", "chef", "well-done"]

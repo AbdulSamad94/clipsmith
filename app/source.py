@@ -165,7 +165,8 @@ def from_local_file(path: Path, workdir: Path, progress: Progress, title: str | 
     )
 
 
-_NOISE = re.compile(r"^\[.*\]$|^\(.*\)$|^>>+$|^♪+$")
+# A token of only dashes is a speaker-change mark in manual captions ("- Joe's dish").
+_NOISE = re.compile(r"^\[.*\]$|^\(.*\)$|^>>+$|^♪+$|^[-–—]+$")
 
 
 def _clean(token: str) -> str:
