@@ -23,6 +23,12 @@ Thanks for helping. Bug reports, ideas and pull requests are all welcome.
 
 Look for issues labelled [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue). Items on the README roadmap are fair game too; comment on the issue first so two people don't build the same thing.
 
+## UI and design changes
+
+The whole page is one file, `static/index.html`: plain HTML, CSS and JavaScript, no build step. Edit it and reload the browser.
+
+For any change to how the page looks or works, include **screenshots or a short screen recording** in the pull request (desktop and phone width), so it can be judged without running it. Keep it accessible: visible labels on every control, a visible keyboard focus ring, buttons at least 44px tall, text contrast of at least 4.5:1, and no information shown by color alone.
+
 ## Tests
 
 ```

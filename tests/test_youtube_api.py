@@ -216,3 +216,21 @@ def test_sign_in_error_redirect_uses_a_fixed_reason(client):
     assert res.headers["location"] in ("/?youtube=error&reason=failed", "/?youtube=error&reason=access_denied")
     res = client.get("/?error=access_denied&state=s1")
     assert res.headers["location"] == "/?youtube=error&reason=access_denied"
+
+
+def test_post_is_refused_if_the_clip_changed_since_the_dialog_opened(client, monkeypatch):
+    # another tab deleted an earlier clip, so this index now holds a different clip
+    _connected(monkeypatch)
+    _done_job()
+    res = client.post("/api/jobs/0000000001/clips/0/youtube",
+                      json={"title": "T", "clip_video": "/media/0000000001/clip_02.mp4"})
+    assert res.status_code == 409 and "changed" in res.json()["detail"]
+    assert client.queued == []
+
+
+def test_post_goes_ahead_when_the_clip_matches(client, monkeypatch):
+    _connected(monkeypatch)
+    _done_job()
+    res = client.post("/api/jobs/0000000001/clips/0/youtube",
+                      json={"title": "T", "clip_video": "/media/0000000001/clip_01.mp4"})
+    assert res.status_code == 200 and len(client.queued) == 1
