@@ -190,7 +190,9 @@ def parse_json3(path: Path) -> list[Word]:
             # Manual captions: the whole line, possibly split over several segs
             # with no offsets. Joined and spread evenly below; giving every word
             # the line's start time made them zero-length, so they were skipped.
-            segs = [{"utf8": " ".join(s.get("utf8", "") for s in segs)}]
+            # Each seg is cleaned first so a multi-word tag like "[Music playing]"
+            # is still dropped whole rather than split into caption words.
+            segs = [{"utf8": " ".join(_clean(s.get("utf8", "")) for s in segs)}]
         if timed:
             for s in segs:
                 tok = _clean(s.get("utf8", ""))
