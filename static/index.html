@@ -401,6 +401,38 @@
     .job-main { flex: 1 1 calc(100% - 60px); }
     .job-thumb { width: 44px; height: 44px; }
   }
+  /* Caption style picker: each option is a small preview of the burned-in captions. */
+  .legend-note { font-weight: 400; color: var(--muted); font-size: 12.5px; text-transform: none; letter-spacing: 0; }
+  .capstyles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+  .capstyles label { display: block; cursor: pointer; }
+  .capstyles input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .capstyles .cs { display: flex; flex-direction: column; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); min-height: 44px; }
+  .capstyles input:checked + .cs { border-color: var(--accent); }
+  .capstyles input:focus-visible + .cs { outline: 3px solid var(--ring); outline-offset: 2px; }
+  .capstyles .frame { position: relative; aspect-ratio: 9 / 10; display: flex; align-items: flex-end; justify-content: center; padding: 0 6px 22%; overflow: hidden;
+    background: radial-gradient(ellipse 45% 38% at 50% 34%, #6b7c93 0 60%, transparent 62%), linear-gradient(160deg, #3b4658, #1d232e); }
+  .capstyles .txt { font-size: 19px; font-weight: 700; line-height: 1.1; text-align: center; color: #fff; white-space: nowrap;
+    -webkit-text-stroke: 4px #000; paint-order: stroke fill; text-shadow: 0 2px 2px rgba(0,0,0,.6); }
+  .capstyles .txt span { display: inline-block; margin: 0 .12em; animation: cs-word 1.8s steps(1) infinite; }
+  .capstyles .txt span:nth-child(2) { animation-delay: .6s; }
+  .capstyles .txt span:nth-child(3) { animation-delay: 1.2s; }
+  @keyframes cs-word { 0% { color: var(--hl); transform: scale(1.08); } 33.4%, 100% { color: #fff; transform: none; } }
+  /* Build-up style: words appear one at a time, as they are spoken. */
+  .capstyles .txt.reveal span { animation-delay: 0s !important; }
+  .capstyles .txt.reveal span:nth-child(1) { animation-name: cs-rev1; }
+  .capstyles .txt.reveal span:nth-child(2) { animation-name: cs-rev2; }
+  .capstyles .txt.reveal span:nth-child(3) { animation-name: cs-rev3; }
+  @keyframes cs-rev1 { 0% { color: var(--hl); } 33.4%, 100% { color: #fff; } }
+  .capstyles .txt.reveal span { overflow: hidden; vertical-align: bottom; }
+  /* Hidden words take no space, so the line stays centred and grows like on the video. */
+  @keyframes cs-rev2 { 0% { max-width: 0; margin: 0; } 33.4% { max-width: 6em; color: var(--hl); } 66.7%, 100% { max-width: 6em; color: #fff; } }
+  @keyframes cs-rev3 { 0% { max-width: 0; margin: 0; } 66.7%, 100% { max-width: 6em; color: var(--hl); } }
+  @media (prefers-reduced-motion: reduce) {
+    .capstyles .txt span { animation: none; }
+    .capstyles .txt span:nth-child(3) { color: var(--hl); }
+  }
+  .capstyles .name { padding: 7px 8px; font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .capstyles .name small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -463,10 +495,10 @@
           <label><input type="radio" name="aspect" value="16:9"><span><i class="ar" style="width:22px;height:12px" aria-hidden="true"></i><b>16:9</b><small>Landscape</small></span></label>
         </div>
       </fieldset>
-      <div class="setting">
-        <label for="style">Caption style</label>
-        <select id="style"></select>
-      </div>
+      <fieldset class="setting wide">
+        <legend>Caption style <span class="legend-note">preview shows how captions look on the video</span></legend>
+        <div class="capstyles" id="style"></div>
+      </fieldset>
       <div class="setting">
         <label for="layout">Framing</label>
         <select id="layout">
@@ -565,11 +597,37 @@ async function init() {
     if (st.missing && st.missing.length) {
       $("#formerr").textContent = `Missing on this computer: ${st.missing.join(", ")}. Install ffmpeg and restart (see README).`;
     }
-    $("#style").innerHTML = Object.entries(st.styles).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+    renderCaptionStyles(st.styles, st.style_looks || {});
   } catch (e) { $("#mode").textContent = "Server not reachable"; }
   showConnectResult();
   await loadYouTube();
   await refresh();
+}
+
+// ---------- caption style previews ----------
+const CAPTION_FONTS = {  // files served from /fonts, the same ones ffmpeg burns in
+  "Bangers": "Bangers-Regular.ttf", "Anton": "Anton-Regular.ttf",
+  "Bebas Neue": "BebasNeue-Regular.ttf", "Poppins ExtraBold": "Poppins-ExtraBold.ttf",
+};
+function renderCaptionStyles(labels, looks) {
+  const faces = Object.entries(CAPTION_FONTS).map(([name, file]) =>
+    `@font-face { font-family: "cap ${name}"; src: url("/fonts/${file}") format("truetype"); font-display: swap; }`).join(" ");
+  let tag = $("#capfonts");
+  if (!tag) { tag = document.createElement("style"); tag.id = "capfonts"; document.head.appendChild(tag); }
+  tag.textContent = faces;
+  const saved = (() => { try { return localStorage.getItem("captionStyle"); } catch { return null; } })();
+  const keys = Object.keys(labels);
+  const pick = keys.includes(saved) ? saved : keys[0];
+  $("#style").innerHTML = keys.map((k) => {
+    const look = looks[k] || {};
+    const words = look.upper === false ? ["this", "is", "how"] : ["THIS", "IS", "HOW"];
+    // bundled fonts load as "cap <name>"; system fonts (Arial, Arial Black) are used directly
+    const font = look.font ? `"cap ${look.font}", "${look.font}", ` : "";
+    return `<label><input type="radio" name="style" value="${esc(k)}" ${k === pick ? "checked" : ""}>
+      <span class="cs"><span class="frame" aria-hidden="true"><span class="txt${look.reveal ? " reveal" : ""}" style="font-size:${Math.min(22, 5.6 / (look.width || 0.3)).toFixed(1)}px; font-family:${esc(font)}sans-serif; --hl:${esc(look.active || "#ffd60a")}">${words.map((w) => `<span>${w}</span>`).join("")}</span></span>
+      <span class="name">${esc(labels[k])}${look.font ? `<small>${esc(look.font)}</small>` : ""}</span></span></label>`;
+  }).join("");
+  $("#style").addEventListener("change", (e) => { try { localStorage.setItem("captionStyle", e.target.value); } catch {} });
 }
 
 // ---------- YouTube ----------
@@ -1135,7 +1193,7 @@ $("#form").addEventListener("submit", async (e) => {
       fd.append("file", file);
       for (const [k, v] of Object.entries({
         clip_count: radio("count"), min_len, max_len,
-        style: $("#style").value, layout: $("#layout").value, aspect: radio("aspect"), hook: $("#hook").checked, trim_pauses: $("#trim").checked,
+        style: radio("style"), layout: $("#layout").value, aspect: radio("aspect"), hook: $("#hook").checked, trim_pauses: $("#trim").checked,
         prompt: $("#prompt").value.trim(), start_time, end_time,
       })) if (v !== null && v !== undefined) fd.append(k, v);
       $("#go").disabled = true;
@@ -1162,7 +1220,7 @@ $("#form").addEventListener("submit", async (e) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: $("#url").value.trim(), clip_count: +radio("count"), min_len, max_len,
-        style: $("#style").value, layout: $("#layout").value, aspect: radio("aspect"), hook: $("#hook").checked, trim_pauses: $("#trim").checked,
+        style: radio("style"), layout: $("#layout").value, aspect: radio("aspect"), hook: $("#hook").checked, trim_pauses: $("#trim").checked,
         prompt: $("#prompt").value.trim(), start_time, end_time,
       }),
     });

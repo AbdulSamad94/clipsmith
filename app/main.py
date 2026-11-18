@@ -265,6 +265,10 @@ def status() -> dict:
             "ollama": f"{config.OLLAMA_MODEL} (local)",
         }.get(config.ai_provider()),
         "styles": {k: v["label"] for k, v in render.STYLES.items()},
+        "style_looks": {
+            k: {"font": v["font"], "active": v["css"], "upper": v["upper"], "width": v["cw"],
+                "reveal": bool(v.get("reveal"))} for k, v in render.STYLES.items()
+        },
     }
 
 
@@ -540,6 +544,7 @@ def _publish(job_id: str, index: int, meta: dict, notify: bool) -> None:
         _set_youtube(job_id, index, {"status": "error", "error": f"Upload failed: {exc}"[:300]})
 
 
+app.mount("/fonts", StaticFiles(directory=render.FONTS_DIR), name="fonts")
 app.mount("/media", StaticFiles(directory=config.JOBS_DIR), name="media")
 
 

@@ -2,6 +2,7 @@
 reframe to 9:16 around the speaker, burn in animated captions, encode."""
 from __future__ import annotations
 
+import shutil
 import statistics
 import subprocess
 from pathlib import Path
@@ -18,11 +19,32 @@ W, H = config.OUT_W, config.OUT_H
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080)}
 DEFAULT_ASPECT = "9:16"
 
-# ASS colours are &HBBGGRR&
+FONTS_DIR = config.ROOT / "fonts"
+
+# ASS colours are &HBBGGRR&. Fonts ship in fonts/ (SIL OFL) so captions look the
+# same on every computer and work offline. "cw": average character width
+# (spaces included) as a fraction of the font size, measured by rendering a
+# sentence with libass; only used to size the web page preview.
+# "css": colours for the web page preview (keep in step with "active").
 STYLES = {
-    "yellow": {"label": "Bold Yellow", "font": "Arial Black", "size": 92, "active": "&H00F6FF&", "upper": True},
-    "green": {"label": "Green Pop", "font": "Arial Black", "size": 92, "active": "&H5CFF4D&", "upper": True},
-    "clean": {"label": "Clean White", "font": "Arial", "size": 84, "active": "&HFFD27A&", "upper": False},
+    "yellow": {"label": "Bold Yellow", "font": "Arial Black", "file": None, "size": 92,
+               "active": "&H00F6FF&", "css": "#FFF600", "upper": True, "cw": 0.455, "outline": 7},
+    "green": {"label": "Green Pop", "font": "Arial Black", "file": None, "size": 92,
+              "active": "&H5CFF4D&", "css": "#4DFF5C", "upper": True, "cw": 0.455, "outline": 7},
+    "beast": {"label": "Comic", "font": "Bangers", "file": "Bangers-Regular.ttf", "size": 150,
+              "active": "&H00F6FF&", "css": "#FFF600", "upper": True, "cw": 0.2, "outline": 9},
+    "anton": {"label": "Impact", "font": "Anton", "file": "Anton-Regular.ttf", "size": 140,
+              "active": "&H3B3BFF&", "css": "#FF3B3B", "upper": True, "cw": 0.23, "outline": 7},
+    "bebas": {"label": "Tall", "font": "Bebas Neue", "file": "BebasNeue-Regular.ttf", "size": 148,
+              "active": "&HFFE600&", "css": "#00E6FF", "upper": True, "cw": 0.25, "outline": 6},
+    "clean": {"label": "Clean White", "font": "Arial", "file": None, "size": 84,
+              "active": "&HFFD27A&", "css": "#7AD2FF", "upper": False, "cw": 0.36, "outline": 7},
+    # Modelled on OpusClip's own Shorts (studied frame by frame): words appear one
+    # by one as they are spoken instead of the whole group at once, sentence case,
+    # light outline, sitting at chest height rather than near the bottom.
+    "reveal": {"label": "Build-up", "font": "Poppins ExtraBold", "file": "Poppins-ExtraBold.ttf", "size": 112,
+               "active": "&H00E1FF&", "css": "#FFE100", "upper": False, "cw": 0.28, "outline": 4,
+               "reveal": True, "v": 0.40},
 }
 
 
@@ -250,7 +272,7 @@ def build_ass(
     # in square/landscape frames the text is a little smaller so lines still fit.
     k = min(w, h) / 1080 * (1.0 if h > w else 0.85)
     cap_size, hook_size = round(st["size"] * k), round(64 * k)
-    cap_lr, cap_v = round(w * 0.065), round(h * 0.245)
+    cap_lr, cap_v = round(w * 0.065), round(h * st.get("v", 0.245))
     hook_lr, hook_v = round(w * 0.0834), round(h * 0.12)
     if hook_top is not None:
         hook_v = max(0, hook_top - round(hook_size * 0.6))  # straddle the seam, clear of the face
@@ -263,7 +285,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{st['font']},{cap_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,7,3,2,{cap_lr},{cap_lr},{cap_v},1
+Style: Cap,{st['font']},{cap_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,{st['outline']},3,2,{cap_lr},{cap_lr},{cap_v},1
 Style: Hook,Arial Black,{hook_size},&H00101010,&H00101010,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,{hook_lr},{hook_lr},{hook_v},1
 
 [Events]
@@ -286,6 +308,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             parts = []
             for j, x in enumerate(group):
+                if st.get("reveal") and j > i:
+                    break  # build-up style: words not spoken yet aren't shown
                 tok = _esc(x.text.upper() if st["upper"] else x.text)
                 if j == i:
                     parts.append(f"{{\\c{st['active']}\\fscx108\\fscy108}}{tok}{{\\c&HFFFFFF&\\fscx100\\fscy100}}")
@@ -372,6 +396,15 @@ def render_clip(
         cap_words, cap_start = trim.remap_words(clip_words, start, keep), 0.0
     else:
         out_len, cap_words, cap_start = clip_len, clip_words, start
+    # libass reads the bundled fonts from a folder next to the .ass file: a bare
+    # relative path, for the same reason as the cwd note below.
+    fonts = out_dir / "fonts"
+    fonts.mkdir(exist_ok=True)
+    st = STYLES.get(style, STYLES["yellow"])
+    for f in {st["file"]} - {None}:  # the original styles use system fonts
+        if (FONTS_DIR / f).exists():
+            shutil.copyfile(FONTS_DIR / f, fonts / f)
+    ass_f = f"ass={ass_name}:fontsdir=fonts"
     (out_dir / ass_name).write_text(
         build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
         encoding="utf-8",
@@ -384,22 +417,22 @@ def render_clip(
             f"[0:v]split[a][b];"
             f"[a]crop={cw}:{ch}:{cx}:{cy},scale={W}:{split['top_h']}:flags=lanczos,setsar=1[cam];"
             f"[b]crop={gw}:{gh}:{gx}:{gy},scale={W}:{split['bottom_h']}:flags=lanczos,setsar=1[game];"
-            f"[cam][game]vstack,ass={ass_name}[v]"
+            f"[cam][game]vstack,{ass_f}[v]"
         )
     elif vertical_already:
         used = "source"
-        graph = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},ass={ass_name}[v]"
+        graph = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{ass_f}[v]"
     elif used == "fill":
         crop_w = crop_width(src_w, src_h, W, H)
         x = _crop_x_expr(keys, src_w, crop_w)
-        graph = f"[0:v]crop={crop_w}:{src_h}:x='{x}':y=0,scale={W}:{H}:flags=lanczos,ass={ass_name}[v]"
+        graph = f"[0:v]crop={crop_w}:{src_h}:x='{x}':y=0,scale={W}:{H}:flags=lanczos,{ass_f}[v]"
     else:  # fit: whole frame over a blurred copy of itself
         fg = f"{W}:-2" if src_r >= out_r else f"-2:{H}"  # fit the limiting side
         graph = (
             f"[0:v]split[a][b];"
             f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=24:4,eq=brightness=-0.12[bg];"
             f"[b]scale={fg}:flags=lanczos[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,ass={ass_name}[v]"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,{ass_f}[v]"
         )
 
     audio_maps = ["0:a?"]
@@ -408,8 +441,8 @@ def render_clip(
         # and before the captions (which are already re-timed). fps=30 first gives
         # a constant frame rate, so N/30 is the exact new timestamp.
         expr = trim.select_expr(keep)
-        graph = graph.replace(f",ass={ass_name}[v]",
-                              f",fps=30,select='{expr}',setpts=N/30/TB,ass={ass_name}[v]")
+        graph = graph.replace(f",{ass_f}[v]",
+                              f",fps=30,select='{expr}',setpts=N/30/TB,{ass_f}[v]")
         # Trim every audio track: "[0:a]" alone would pick only the first one,
         # while the untrimmed path keeps them all.
         tracks = _audio_tracks(video)
@@ -436,4 +469,5 @@ def render_clip(
         cwd=out_dir, capture_output=True,
     )
     (out_dir / ass_name).unlink(missing_ok=True)
+    shutil.rmtree(fonts, ignore_errors=True)
     return {"layout": used, "length": round(out_len, 2)}

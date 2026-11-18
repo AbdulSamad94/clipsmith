@@ -165,7 +165,8 @@ def from_local_file(path: Path, workdir: Path, progress: Progress, title: str | 
     )
 
 
-_NOISE = re.compile(r"^\[.*\]$|^\(.*\)$|^>>+$|^♪+$")
+# A token of only dashes is a speaker-change mark in manual captions ("- Joe's dish").
+_NOISE = re.compile(r"^\[.*\]$|^\(.*\)$|^>>+$|^♪+$|^[-–—]+$")
 
 
 def _clean(token: str) -> str:
@@ -186,7 +187,14 @@ def parse_json3(path: Path) -> list[Word]:
         ev_start = ev.get("tStartMs", 0) / 1000
         ev_end = ev_start + ev.get("dDurationMs", 0) / 1000
         timed = any("tOffsetMs" in s for s in segs[1:])
-        if timed or len(segs) > 1:
+        if not timed:
+            # Manual captions: the whole line, possibly split over several segs
+            # with no offsets. Joined and spread evenly below; giving every word
+            # the line's start time made them zero-length, so they were skipped.
+            # Each seg is cleaned first so a multi-word tag like "[Music playing]"
+            # is still dropped whole rather than split into caption words.
+            segs = [{"utf8": " ".join(_clean(s.get("utf8", "")) for s in segs)}]
+        if timed:
             for s in segs:
                 tok = _clean(s.get("utf8", ""))
                 if not tok:
