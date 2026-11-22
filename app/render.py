@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import captions_fx as fx
 from . import config
 from .source import Word
 
@@ -92,15 +93,37 @@ def _faces(entry) -> list[Box]:
     return [entry] if isinstance(entry[0], (int, float)) else list(entry)
 
 
-def track_samples(boxes: list[tuple[float, list[Box] | Box | None]]) -> list[tuple[float, float | None]]:
+def track_samples(
+    boxes: list[tuple[float, list[Box] | Box | None]], sticky: bool = False
+) -> list[tuple[float, float | None]]:
     """Face boxes -> centre-x of the largest face per frame, for camera_path.
     A face under ~7% of frame width is a wide shot (stage, audience);
-    following it gives a jumpy crop."""
+    following it gives a jumpy crop.
+    With sticky (podcast mode), sticks with the face it is already following: another face only takes
+    over when it is clearly bigger (closer to the camera, or the shot changed),
+    so two similar faces don't make the crop flip between people on detector
+    noise."""
     out = []
+    prev: float | None = None
     for t, entry in boxes:
         big = [b for b in _faces(entry) if b[2] >= 0.07]
-        out.append((t, max(big, key=lambda b: b[2] * b[3])[0] if big else None))
+        if not big:
+            out.append((t, None))
+            continue
+        pick = max(big, key=_area)
+        if sticky and prev is not None:
+            same = [b for b in big if abs(b[0] - prev) <= 0.1]
+            if same:
+                cur = max(same, key=_area)
+                if _area(pick) < 1.5 * _area(cur):
+                    pick = cur
+        prev = pick[0]
+        out.append((t, pick[0]))
     return out
+
+
+def _area(b: Box) -> float:
+    return b[2] * b[3]
 
 
 def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, float | None]]:
@@ -188,6 +211,52 @@ def split_layout(
     return {"cam": rect(cam_x, cam_y, cw, ch), "game": rect(gx, gy, gw, gh), "top_h": top_h, "bottom_h": bottom_h}
 
 
+def podcast_pair(boxes: list[tuple[float, list[Box] | Box | None]]) -> tuple[Box, Box] | None:
+    """Two people sitting side by side (interview, podcast): one steady face on
+    each half of the frame, both on screen in most frames. Returns their median
+    boxes (left, right), or None for one speaker, a wide shot, or a second face
+    that only shows up now and then."""
+    left: list[Box] = []
+    right: list[Box] = []
+    for _, entry in boxes:
+        big = [b for b in _faces(entry) if b[2] >= 0.07]
+        lb = [b for b in big if b[0] < 0.5]
+        rb = [b for b in big if b[0] >= 0.5]
+        if lb and rb:
+            left.append(max(lb, key=_area))
+            right.append(max(rb, key=_area))
+    if len(left) < max(3, 0.4 * len(boxes)):
+        return None
+    for side in (left, right):
+        if statistics.pstdev([b[0] for b in side]) > 0.08:
+            return None  # moving around: not two seated speakers
+    pair = tuple(tuple(statistics.median(b[k] for b in side) for k in range(4)) for side in (left, right))
+    if pair[1][0] - pair[0][0] < 0.25:
+        return None  # so close that each crop would show both people
+    return pair
+
+
+def podcast_layout(src_w: int, src_h: int, a: Box, b: Box, out_w: int, out_h: int) -> dict | None:
+    """Crops for two speakers stacked in a tall frame, the left one on top.
+    Each crop is about 2.6 face-heights tall, shaped like its half of the
+    output so nothing is stretched. None for a frame that isn't tall."""
+    if out_w >= out_h:
+        return None
+    top_h = _even(out_h / 2)
+    out: dict = {"top_h": top_h, "bottom_h": out_h - top_h}
+    for key, (cx, cy, _, fh) in zip(("top", "bottom"), sorted((a, b), key=lambda f: f[0])):
+        ph = out[f"{key}_h"]
+        ch = min(src_h, fh * src_h * 2.6)
+        cw = ch * out_w / ph
+        if cw > src_w:
+            cw, ch = src_w, src_w * ph / out_w
+        w, h = _even(cw), _even(ch)
+        x = int(min(max(0, cx * src_w - w / 2), src_w - w)) // 2 * 2
+        y = int(min(max(0, cy * src_h - h * 0.4), src_h - h)) // 2 * 2
+        out[key] = (x, y, w, h)
+    return out
+
+
 def camera_path(samples: list[tuple[float, float | None]], deadzone: float = 0.09) -> list[tuple[float, float]] | None:
     """Convert face samples into a steady camera: hold position, and only move
     when the face has clearly left the current framing. Returns step keyframes
@@ -259,13 +328,32 @@ def _groups(words: list[Word], max_words: int = 3, max_chars: int = 18) -> list[
     return groups
 
 
+def _fx_word(tok: str, active: bool, key: bool, colour: str, key_colour: str) -> str:
+    """One word with highlight effects: a key word keeps its own colour and a
+    larger size for the whole group; the spoken word pops in (grows from 80%)."""
+    c = key_colour if key else colour
+    size = 118 if key else 108
+    if active:
+        tag = f"{{\\c{c}\\fscx80\\fscy80\\t(0,100,\\fscx{size}\\fscy{size})}}"
+    elif key:
+        tag = f"{{\\c{c}\\fscx112\\fscy112}}"
+    else:
+        return tok
+    return f"{tag}{tok}{{\\c&HFFFFFF&\\fscx100\\fscy100}}"
+
+
 def build_ass(
     words: list[Word], clip_start: float, clip_len: float, style_key: str, hook: str | None,
     size: tuple[int, int] = (W, H),
     hook_top: int | None = None,
+    highlight: bool = False,
+    emoji: bool = False,
 ) -> str:
     """`hook_top`: y of a panel seam to centre the hook banner on (split layout),
-    instead of its usual place near the top of the frame."""
+    instead of its usual place near the top of the frame.
+    `highlight`: colour and enlarge the key word of each group (rule-based, see
+    captions_fx) and pop every word in as it is spoken. `emoji`: with
+    `highlight`, add one emoji per group from the local keyword map."""
     st = STYLES.get(style_key, STYLES["yellow"])
     w, h = size
     # Margins are proportional to the frame (they reproduce the 9:16 values exactly);
@@ -299,7 +387,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"{{\\fad(120,250)}}{text}"
         )
 
+    key_c = fx.key_colour(st["active"])
     for group in _groups(words):
+        keys = set(fx.pick_keywords([x.text for x in group])) if highlight else set()
+        emo_at, emo = None, None
+        if highlight and emoji:  # at most one emoji per group, keyword first
+            for j in sorted(range(len(group)), key=lambda j: j not in keys):
+                emo = fx.emoji_for(group[j].text)
+                if emo:
+                    emo_at = j
+                    break
         for i, w in enumerate(group):
             s = w.start - clip_start
             e = (group[i + 1].start if i + 1 < len(group) else w.end) - clip_start
@@ -311,7 +408,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if st.get("reveal") and j > i:
                     break  # build-up style: words not spoken yet aren't shown
                 tok = _esc(x.text.upper() if st["upper"] else x.text)
-                if j == i:
+                if highlight:
+                    tok = _fx_word(tok, active=j == i, key=j in keys, colour=st["active"], key_colour=key_c)
+                    parts.append(f"{tok} {emo}" if j == emo_at else tok)
+                elif j == i:
                     parts.append(f"{{\\c{st['active']}\\fscx108\\fscy108}}{tok}{{\\c&HFFFFFF&\\fscx100\\fscy100}}")
                 else:
                     parts.append(tok)
@@ -353,6 +453,8 @@ def render_clip(
     aspect: str = DEFAULT_ASPECT,
     facecam: Box | None = None,
     keep: list[tuple[float, float]] | None = None,
+    highlight: bool = False,
+    emoji: bool = False,
 ) -> dict:
     """Writes <name>.mp4 and <name>.jpg into out_dir. Returns what layout was used.
     `facecam` skips detection (used by tests and by a forced split).
@@ -373,17 +475,27 @@ def render_clip(
     keys = None
     split = None
     tall = out_r < 1  # stacking two panels only makes sense in a tall frame
-    if layout in ("auto", "fill", "split") and not vertical_already:
+    pod = None
+    sticky = False
+    if layout in ("auto", "fill", "split", "podcast") and not vertical_already:
         boxes = detect_faces(video, start, end) if facecam is None else []
+        if layout == "podcast":
+            pair = podcast_pair(boxes) if tall else None
+            pod = podcast_layout(src_w, src_h, *pair, W, H) if pair else None
+            if pod:
+                used = "podcast"
+            else:
+                layout = "auto"  # not two speakers: follow the main face instead
+                sticky = True
         if layout in ("auto", "split") and tall:
             cam = facecam or facecam_from_faces(boxes)
             split = split_layout(src_w, src_h, cam, W, H) if cam else None
             if split:
                 used = "split"
-        if split is None:
+        if split is None and pod is None:
             if layout == "split":
                 layout = "auto"  # asked for split but no facecam found: pick the next best layout
-            keys = camera_path(track_samples(boxes)) if layout in ("auto", "fill") else None
+            keys = camera_path(track_samples(boxes, sticky=sticky)) if layout in ("auto", "fill") else None
             if layout == "auto":
                 used = "fill" if keys else "fit"
             elif keys is None:
@@ -406,7 +518,8 @@ def render_clip(
             shutil.copyfile(FONTS_DIR / f, fonts / f)
     ass_f = f"ass={ass_name}:fontsdir=fonts"
     (out_dir / ass_name).write_text(
-        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
+        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=(split or pod)["top_h"] if (split or pod) else None,
+                  highlight=highlight, emoji=emoji),
         encoding="utf-8",
     )
 
@@ -418,6 +531,15 @@ def render_clip(
             f"[a]crop={cw}:{ch}:{cx}:{cy},scale={W}:{split['top_h']}:flags=lanczos,setsar=1[cam];"
             f"[b]crop={gw}:{gh}:{gx}:{gy},scale={W}:{split['bottom_h']}:flags=lanczos,setsar=1[game];"
             f"[cam][game]vstack,{ass_f}[v]"
+        )
+    elif pod:
+        tx, ty, tw, th = pod["top"]
+        bx, by, bw, bh = pod["bottom"]
+        graph = (
+            f"[0:v]split[a][b];"
+            f"[a]crop={tw}:{th}:{tx}:{ty},scale={W}:{pod['top_h']}:flags=lanczos,setsar=1[top];"
+            f"[b]crop={bw}:{bh}:{bx}:{by},scale={W}:{pod['bottom_h']}:flags=lanczos,setsar=1[bot];"
+            f"[top][bot]vstack,{ass_f}[v]"
         )
     elif vertical_already:
         used = "source"

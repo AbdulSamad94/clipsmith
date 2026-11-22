@@ -79,6 +79,8 @@ class JobRequest(BaseModel):
     end_time: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     aspect: str = "9:16"
     trim_pauses: bool = True
+    highlight_keywords: bool = False  # colour + pop the key word of each caption group
+    emoji: bool = False  # with highlight_keywords: add an emoji from a small local map
 
 
 _JOB_ID = re.compile(r"[0-9a-f]{10}")  # uuid4().hex[:10], see _new_job
@@ -229,7 +231,7 @@ def _run(job_id: str, req: JobRequest) -> None:
             info = render.render_clip(
                 src.video_path, src.words, start, end, workdir, name,
                 style=req.style, layout=req.layout, hook=clip.hook if req.hook else None, aspect=req.aspect,
-                keep=keep,
+                keep=keep, highlight=req.highlight_keywords, emoji=req.emoji,
             )
             done.append(
                 asdict(clip)
@@ -280,7 +282,7 @@ def _check_options(req: JobRequest) -> None:
         raise HTTPException(400, "Minimum length must be shorter than maximum length.")
     if req.style not in render.STYLES:
         raise HTTPException(400, "Unknown caption style.")
-    if req.layout not in ("auto", "fill", "fit", "split"):
+    if req.layout not in ("auto", "fill", "fit", "split", "podcast"):
         raise HTTPException(400, "Unknown layout.")
     if req.start_time is not None and req.end_time is not None and req.end_time <= req.start_time:
         raise HTTPException(400, "The 'To' time must be after the 'From' time.")
@@ -328,6 +330,8 @@ async def upload_job(
     end_time: float | None = Form(None),
     aspect: str = Form("9:16"),
     trim_pauses: bool = Form(True),
+    highlight_keywords: bool = Form(False),
+    emoji: bool = Form(False),
 ) -> dict:
     name = Path(file.filename or "").name
     ext = Path(name).suffix.lower()
@@ -337,7 +341,7 @@ async def upload_job(
         req = JobRequest(url="", clip_count=clip_count, min_len=min_len, max_len=max_len,
                          style=style, layout=layout, hook=hook,
                          prompt=prompt, start_time=start_time, end_time=end_time, aspect=aspect,
-                         trim_pauses=trim_pauses)
+                         trim_pauses=trim_pauses, highlight_keywords=highlight_keywords, emoji=emoji)
     except ValidationError as exc:
         raise HTTPException(422, str(exc)) from None
     _check_options(req)

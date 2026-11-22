@@ -41,7 +41,7 @@ Paste a YouTube link. Clipsmith finds the best 30–60 second moments, crops the
 
 1. **Downloads** the video and YouTube's captions (or transcribes the audio with Whisper if there are none).
 2. **Picks the moments** that open strong, stand on their own and end on a complete thought, and gives each a viral score, a title, an on-screen hook, a caption and hashtags.
-3. **Reframes** to 9:16, following the speaker's face. Wide shots get the full frame over a blurred background instead.
+3. **Reframes** to 9:16, following the speaker's face. Wide shots get the full frame over a blurred background instead. **Podcast** framing stacks two side-by-side speakers top and bottom, each cropped around their face; with only one face it falls back to following the speaker, sticking with one person instead of flipping between similar faces.
 4. **Captions** every word as it's spoken, in one of three styles.
 5. **Exports** MP4s you can download, or post and schedule straight to YouTube.
 
@@ -116,7 +116,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 ## Known limitations
 
 - The small local model sometimes gets facts or numbers wrong in titles. **Check titles before posting.**
-- Face tracking is basic (OpenCV). Fast camera cuts can make the crop lag.
+- Face tracking is basic (OpenCV, frontal faces only). Fast camera cuts can make the crop lag, and podcast mode can miss speakers filmed in profile. There is no audio-based active-speaker detection; framing favours the biggest, steadiest face.
 - Posting is built in for YouTube only; for TikTok and Reels, download the MP4 and upload it yourself.
 
 ## Roadmap
@@ -125,7 +125,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 - [x] "Prompt to clip": describe the moment you want
 - [x] Post and schedule directly to YouTube
 - [x] Edit clip start/end and caption text before export
-- [ ] Keyword and emoji highlights in captions
+- [x] Keyword and emoji highlights in captions
 - [ ] Brand template (logo, fonts, colours)
 
 Contributions are welcome! **Designers especially:** UI/UX ideas are wanted, see [issue #24](https://github.com/AbdulSamad94/clipsmith/issues/24). See [CONTRIBUTING.md](CONTRIBUTING.md) and the [`good first issue`](https://github.com/AbdulSamad94/clipsmith/labels/good%20first%20issue) label. If Clipsmith saves you money, a ⭐ helps other people find it.
