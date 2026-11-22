@@ -615,11 +615,15 @@ function captionFx() {
   const hl = $("#highlight").checked;
   return { highlight_keywords: hl, emoji: hl && $("#emoji").checked };
 }
-$("#highlight").addEventListener("change", () => {
+function syncCaptionFx() {
   const on = $("#highlight").checked;
   $("#emoji").disabled = !on;
   if (!on) $("#emoji").checked = false;
-});
+}
+$("#highlight").addEventListener("change", syncCaptionFx);
+// Browsers can restore checkbox state on reload / back-forward cache, but not `disabled`.
+syncCaptionFx();
+addEventListener("pageshow", syncCaptionFx);
 
 // ---------- caption style previews ----------
 const CAPTION_FONTS = {  // files served from /fonts, the same ones ffmpeg burns in
