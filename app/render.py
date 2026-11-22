@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import captions_fx as fx
 from . import config
 from .source import Word
 
@@ -259,13 +260,32 @@ def _groups(words: list[Word], max_words: int = 3, max_chars: int = 18) -> list[
     return groups
 
 
+def _fx_word(tok: str, active: bool, key: bool, colour: str, key_colour: str) -> str:
+    """One word with highlight effects: a key word keeps its own colour and a
+    larger size for the whole group; the spoken word pops in (grows from 80%)."""
+    c = key_colour if key else colour
+    size = 118 if key else 108
+    if active:
+        tag = f"{{\\c{c}\\fscx80\\fscy80\\t(0,100,\\fscx{size}\\fscy{size})}}"
+    elif key:
+        tag = f"{{\\c{c}\\fscx112\\fscy112}}"
+    else:
+        return tok
+    return f"{tag}{tok}{{\\c&HFFFFFF&\\fscx100\\fscy100}}"
+
+
 def build_ass(
     words: list[Word], clip_start: float, clip_len: float, style_key: str, hook: str | None,
     size: tuple[int, int] = (W, H),
     hook_top: int | None = None,
+    highlight: bool = False,
+    emoji: bool = False,
 ) -> str:
     """`hook_top`: y of a panel seam to centre the hook banner on (split layout),
-    instead of its usual place near the top of the frame."""
+    instead of its usual place near the top of the frame.
+    `highlight`: colour and enlarge the key word of each group (rule-based, see
+    captions_fx) and pop every word in as it is spoken. `emoji`: with
+    `highlight`, add one emoji per group from the local keyword map."""
     st = STYLES.get(style_key, STYLES["yellow"])
     w, h = size
     # Margins are proportional to the frame (they reproduce the 9:16 values exactly);
@@ -299,7 +319,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"{{\\fad(120,250)}}{text}"
         )
 
+    key_c = fx.key_colour(st["active"])
     for group in _groups(words):
+        keys = set(fx.pick_keywords([x.text for x in group])) if highlight else set()
+        emo_at, emo = None, None
+        if highlight and emoji:  # at most one emoji per group, keyword first
+            for j in sorted(range(len(group)), key=lambda j: j not in keys):
+                emo = fx.emoji_for(group[j].text)
+                if emo:
+                    emo_at = j
+                    break
         for i, w in enumerate(group):
             s = w.start - clip_start
             e = (group[i + 1].start if i + 1 < len(group) else w.end) - clip_start
@@ -311,7 +340,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if st.get("reveal") and j > i:
                     break  # build-up style: words not spoken yet aren't shown
                 tok = _esc(x.text.upper() if st["upper"] else x.text)
-                if j == i:
+                if highlight:
+                    tok = _fx_word(tok, active=j == i, key=j in keys, colour=st["active"], key_colour=key_c)
+                    parts.append(f"{tok} {emo}" if j == emo_at else tok)
+                elif j == i:
                     parts.append(f"{{\\c{st['active']}\\fscx108\\fscy108}}{tok}{{\\c&HFFFFFF&\\fscx100\\fscy100}}")
                 else:
                     parts.append(tok)
@@ -353,6 +385,8 @@ def render_clip(
     aspect: str = DEFAULT_ASPECT,
     facecam: Box | None = None,
     keep: list[tuple[float, float]] | None = None,
+    highlight: bool = False,
+    emoji: bool = False,
 ) -> dict:
     """Writes <name>.mp4 and <name>.jpg into out_dir. Returns what layout was used.
     `facecam` skips detection (used by tests and by a forced split).
@@ -406,7 +440,8 @@ def render_clip(
             shutil.copyfile(FONTS_DIR / f, fonts / f)
     ass_f = f"ass={ass_name}:fontsdir=fonts"
     (out_dir / ass_name).write_text(
-        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
+        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None,
+                  highlight=highlight, emoji=emoji),
         encoding="utf-8",
     )
 
