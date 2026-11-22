@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -41,7 +42,24 @@ def _ydl_base() -> dict:
     # Node has to be enabled explicitly.
     if not shutil.which("deno") and shutil.which("node"):
         opts["js_runtimes"] = {"node": {}}
+    opts.update(_cookie_opts())
     return opts
+
+
+def _cookie_opts() -> dict:
+    """Cookies for YouTube's "confirm you're not a bot" check, from .env.
+    YTDLP_COOKIES_FILE (an exported cookies.txt) wins over YTDLP_COOKIES_FROM_BROWSER
+    ("firefox" or "firefox:<profile>"). Read at call time so .env edits apply per job."""
+    path = os.environ.get("YTDLP_COOKIES_FILE", "").strip().strip('"')
+    if path:
+        if not Path(path).is_file():
+            raise RuntimeError(f"YTDLP_COOKIES_FILE points to a file that doesn't exist: {path}")
+        return {"cookiefile": path}
+    browser = os.environ.get("YTDLP_COOKIES_FROM_BROWSER", "").strip()
+    if browser:
+        name, _, profile = browser.partition(":")
+        return {"cookiesfrombrowser": (name.strip().lower(), profile.strip() or None, None, None)}
+    return {}
 
 
 def download(url: str, workdir: Path, progress: Progress) -> Source:

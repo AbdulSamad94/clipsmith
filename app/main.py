@@ -151,6 +151,10 @@ def friendly_error(exc: BaseException) -> str:
     low = text.lower()
     if "getaddrinfo" in low or "failed to resolve" in low or "connection refused" in low or "timed out" in low:
         return "Couldn't reach YouTube. Check your internet connection and try again."
+    if "confirm you" in low and "not a bot" in low:
+        return ("YouTube asked to confirm you're not a bot. Sign in to YouTube in Firefox, then add "
+                "YTDLP_COOKIES_FROM_BROWSER=firefox to your .env (or YTDLP_COOKIES_FILE=<path to cookies.txt>) "
+                "and restart Clipsmith. Or download the video yourself and upload the file.")
     if "429" in low or "too many requests" in low:
         return "YouTube is limiting requests from your connection right now. Wait a few minutes and try again."
     text = re.sub(r"^\[\w+\]\s*[\w-]+:\s*", "", text)  # drop yt-dlp's "[youtube] <id>: " prefix

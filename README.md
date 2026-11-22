@@ -118,6 +118,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 - The small local model sometimes gets facts or numbers wrong in titles. **Check titles before posting.**
 - Face tracking is basic (OpenCV, frontal faces only). Fast camera cuts can make the crop lag, and podcast mode can miss speakers filmed in profile. There is no audio-based active-speaker detection; framing favours the biggest, steadiest face.
 - Posting is built in for YouTube only; for TikTok and Reels, download the MP4 and upload it yourself.
+- If YouTube says **"Sign in to confirm you're not a bot"**, sign in to YouTube in Firefox and add `YTDLP_COOKIES_FROM_BROWSER=firefox` to `.env`, or point `YTDLP_COOKIES_FILE` at an exported `cookies.txt`. Chrome and Edge cookies can't be read on Windows. You can also download the video yourself and upload the file.
 
 ## Roadmap
 
