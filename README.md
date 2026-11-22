@@ -124,7 +124,7 @@ On a machine with more RAM or a GPU, try a bigger local model for better picks, 
 - [x] Filler word and silence removal
 - [x] "Prompt to clip": describe the moment you want
 - [x] Post and schedule directly to YouTube
-- [ ] Edit clip start/end and caption text before export
+- [x] Edit clip start/end and caption text before export
 - [x] Keyword and emoji highlights in captions
 - [ ] Brand template (logo, fonts, colours)
 
