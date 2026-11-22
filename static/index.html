@@ -157,7 +157,19 @@
   .dlg .opt { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 15px; cursor: pointer; }
   .dlg .opt input { accent-color: var(--accent); width: 19px; height: 19px; margin: 0; }
   .dlg .count { float: right; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .dlg .btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+  .dlg .btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+  /* ---------- YouTube cookies ---------- */
+  .ckline { font-size: 13.5px; color: var(--muted); margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .ckline[hidden] { display: none; }
+  .ckline .ghost, .note .ghost { min-height: 44px; }
+  .note .fix { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .cksteps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.45; }
+  .cksteps a { color: var(--accent); }
+  .ckpick { display: flex; flex-direction: column; gap: 6px; }
+  .ckpick input[type=file] { min-height: 46px; padding: 10px 12px; background: var(--bg); color: var(--text); border: 1px solid #3a3f4d; border-radius: 10px; width: 100%; }
+  .ckok { font-size: 14px; color: var(--good, #7ee2a8); }
+  .ckok:empty { display: none; }
+  .dlg .btns .left { margin-right: auto; }
   .dlg .btns button { min-height: 44px; padding: 0 20px; font-weight: 700; }
   .dlg .err { color: var(--bad); font-size: 14.5px; }
   .dlg .err:empty { display: none; }
@@ -534,6 +546,7 @@
     </div>
     <p class="hint" id="rangehint">Only look for clips between these times, like 12:30 or 1:02:03. Leave empty to use the whole video.</p>
     </div>
+    <p class="ckline" id="ckline" hidden></p>
     <p class="formerr" id="formerr" role="alert"></p>
   </form>
 
@@ -599,6 +612,31 @@
   </form>
 </dialog>
 
+<dialog id="ckdlg" aria-labelledby="ckdlgTitle" aria-describedby="ckdlgWhy">
+  <form class="dlg" id="ckform" method="dialog">
+    <h2 id="ckdlgTitle">Add your YouTube cookies</h2>
+    <p class="hint" id="ckdlgWhy" style="margin:0">YouTube sometimes blocks downloads until it knows a real person is signed in. Your cookies prove that. They stay on this computer and are only sent to YouTube.</p>
+    <ol class="cksteps">
+      <li>In Chrome, Edge or Brave, install <a href="https://chromewebstore.google.com/search/Get%20cookies.txt%20LOCALLY" target="_blank" rel="noopener">Get cookies.txt LOCALLY<span class="sr-only"> (opens in a new tab)</span></a>. In Firefox, use the add-on with the same name.</li>
+      <li>Open <a href="https://www.youtube.com" target="_blank" rel="noopener">youtube.com<span class="sr-only"> (opens in a new tab)</span></a> and make sure you're signed in.</li>
+      <li>Click the extension, then <b>Export</b>. It saves a file like <code>youtube.com_cookies.txt</code>.</li>
+      <li>Choose that file below.</li>
+    </ol>
+    <div class="ckpick">
+      <label class="lbl" for="ckfile">Cookies file (.txt)</label>
+      <input type="file" id="ckfile" accept=".txt,text/plain" aria-describedby="ckhint">
+      <p class="hint" id="ckhint" style="margin:0">Cookies usually last a few weeks. If downloads get blocked again, export and add a fresh file.</p>
+    </div>
+    <div class="ckok" id="ckok" role="status"></div>
+    <div class="err" id="ckerr" role="alert"></div>
+    <div class="btns">
+      <button type="button" class="ghost danger left" id="ckRemove" hidden>Remove saved cookies</button>
+      <button type="button" class="ghost" id="ckCancel">Close</button>
+      <button type="submit" class="go" id="ckSubmit">Save cookies</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -628,9 +666,79 @@ async function init() {
     renderCaptionStyles(st.styles, st.style_looks || {});
   } catch (e) { $("#mode").textContent = "Server not reachable"; }
   showConnectResult();
+  await loadCookies();
   await loadYouTube();
   await refresh();
 }
+
+// ---------- YouTube cookies (for "confirm you're not a bot") ----------
+let cookies = { set: false, source: null, added: null };
+let ckReturn = null;
+async function loadCookies() {
+  try { cookies = await api("/api/cookies"); } catch { return; }
+  const line = $("#ckline");
+  if (!cookies.set) { line.hidden = true; line.innerHTML = ""; return; }
+  const from = cookies.source === "upload"
+    ? `added ${esc(new Date(cookies.added).toLocaleDateString())}`
+    : cookies.source === "env" ? "from your .env file" : "from your browser (.env)";
+  line.innerHTML = `<span>Using your YouTube cookies, ${from}.</span>`
+    + (cookies.source === "upload" ? `<button type="button" class="ghost" data-cookies>Update cookies</button>` : "");
+  line.hidden = false;
+}
+function botFixHtml(j) {
+  const again = cookies.set && j.url
+    ? `<button type="button" class="ghost" data-retry="${esc(j.id)}">Try again</button>` : "";
+  return `<div class="fix"><button type="button" class="ghost" data-cookies>${cookies.set ? "Update YouTube cookies" : "Add YouTube cookies"}</button>${again}</div>`;
+}
+function openCookies(from) {
+  ckReturn = from || document.activeElement;
+  $("#ckfile").value = ""; $("#ckerr").textContent = ""; $("#ckok").textContent = "";
+  $("#ckRemove").hidden = cookies.source !== "upload";
+  $("#ckdlg").showModal();
+}
+async function retryJob(id, btn) {
+  const j = jobs.find((x) => x.id === id);
+  if (!j || !j.url) return;
+  btn.disabled = true;
+  try {
+    await api("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(j.options || {}), url: j.url }) });
+    await api(`/api/jobs/${id}`, { method: "DELETE" }).catch(() => {});
+    announce("Trying that video again.");
+  } catch (e) { alert(e.message); btn.disabled = false; }
+  await refresh();
+}
+$("#ckline").addEventListener("click", (e) => { if (e.target.closest("[data-cookies]")) openCookies(e.target); });
+$("#ckCancel").addEventListener("click", () => $("#ckdlg").close());
+// The button that opened it may have been redrawn: then go to "Try again", or the link box.
+$("#ckdlg").addEventListener("close", () => {
+  const to = ckReturn && document.contains(ckReturn) ? ckReturn : (document.querySelector("[data-retry]") || $("#url"));
+  to.focus();
+});
+$("#ckform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = $("#ckfile").files[0];
+  $("#ckerr").textContent = ""; $("#ckok").textContent = "";
+  if (!f) { $("#ckerr").textContent = "Choose your cookies .txt file first."; $("#ckfile").focus(); return; }
+  const fd = new FormData(); fd.append("file", f);
+  $("#ckSubmit").disabled = true;
+  try {
+    await api("/api/cookies", { method: "POST", body: fd });
+    await loadCookies();
+    render();
+    $("#ckdlg").close();
+    announce("YouTube cookies saved. Try your video again.");
+  } catch (err) { $("#ckerr").textContent = err.message; $("#ckfile").focus(); }
+  $("#ckSubmit").disabled = false;
+});
+$("#ckRemove").addEventListener("click", async () => {
+  if (!confirm("Remove your saved YouTube cookies from this computer?")) return;
+  await api("/api/cookies", { method: "DELETE" }).catch((err) => alert(err.message));
+  await loadCookies();
+  render();
+  $("#ckdlg").close();
+  announce("YouTube cookies removed.");
+});
 
 // ---------- caption keyword / emoji highlights ----------
 function captionFx() {
@@ -1210,7 +1318,7 @@ function jobBlock(j, idx) {
     </div>
     <div class="job-body" id="jb-${esc(j.id)}">
       ${busy ? jobProgressHtml(j) : ""}
-      ${j.status === "error" ? `<div class="note err" role="alert">${esc(j.error)}</div>` : ""}
+      ${j.status === "error" ? `<div class="note err" role="alert">${esc(j.error)}${j.error_code === "bot_check" ? botFixHtml(j) : ""}</div>` : ""}
       ${j.warning ? `<div class="note">${esc(j.warning)}</div>` : ""}
       ${n ? `<ul class="grid">${j.clips.map((c, i) => clipCard(c, j.id, i)).join("")}</ul>` : ""}
     </div>
@@ -1251,10 +1359,10 @@ function announceFinished() {
 
 function render() {
   // Don't rebuild a finished job's cards on every poll: it would restart any video that's playing.
-  const sig = JSON.stringify(jobs.map((j) => [j.id, j.status, j.progress, j.message, j.clips.length, j.warning]));
+  const sig = JSON.stringify([cookies.set, jobs.map((j) => [j.id, j.status, j.progress, j.message, j.clips.length, j.warning])]);
   updateYouTubeStatus(); // upload progress updates in place, without restarting playing videos
   if (sig === render.last) return;
-  const structural = JSON.stringify(jobs.map((j) => [j.id, j.status, j.clips.length, j.warning]));
+  const structural = JSON.stringify([cookies.set, jobs.map((j) => [j.id, j.status, j.clips.length, j.warning])]);
   if (structural === render.lastStructural) {
     for (const j of jobs) {
       const sec = jobsEl.querySelector(`[data-job="${j.id}"]`);
@@ -1503,6 +1611,9 @@ jobsEl.addEventListener("click", async (e) => {
     menu.btn === more ? closeMenu(true) : openMenu(more, jobId, +i);
     return;
   }
+  if (e.target.closest("[data-cookies]")) { openCookies(e.target.closest("[data-cookies]")); return; }
+  const retry = e.target.closest("[data-retry]");
+  if (retry) { await retryJob(retry.dataset.retry, retry); return; }
   const del = e.target.closest("[data-del]");
   if (del && confirm("Remove this video and delete its clips?")) {
     await api(`/api/jobs/${del.dataset.del}`, { method: "DELETE" }).catch((err) => alert(err.message));
