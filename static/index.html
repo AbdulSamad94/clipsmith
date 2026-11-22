@@ -951,13 +951,17 @@ $("#ytform").addEventListener("submit", async (e) => {
 
 // ---------- Clip editor ----------
 let editing = null; // { job, index, video, textTouched }
+let transcriptTicket = 0;
 
 async function loadTranscript() {
   if (!editing) return;
   const start = +$("#edStart").value, end = +$("#edEnd").value;
   if (!(end > start)) return;
+  const ticket = ++transcriptTicket; // only the newest lookup may fill the box
+  const session = editing;
   try {
     const t = await api(`/api/jobs/${editing.job}/transcript?start=${start}&end=${end}`);
+    if (ticket !== transcriptTicket || session !== editing) return;
     $("#edText").value = t.text;
     editing.textTouched = false;
   } catch (err) { $("#ederr").textContent = err.message; }
@@ -988,7 +992,7 @@ function openEdit(jobId, index) {
 
 $("#edStart").addEventListener("input", updateLen);
 $("#edEnd").addEventListener("input", updateLen);
-$("#edText").addEventListener("input", () => { if (editing) editing.textTouched = true; });
+$("#edText").addEventListener("input", () => { if (editing) { editing.textTouched = true; transcriptTicket++; } });
 $("#edReload").addEventListener("click", loadTranscript);
 $("#edCancel").addEventListener("click", () => $("#eddlg").close());
 $("#eddlg").addEventListener("close", () => { if (returnFocus && document.contains(returnFocus)) returnFocus.focus(); });

@@ -218,3 +218,93 @@ def test_pipeline_keeps_source_and_transcript(monkeypatch, client, renders):
     d = main._job_dir("00000000bb")
     assert (d / "source.mp4").exists()
     assert [w.text for w in main._load_transcript("00000000bb")][:2] == ["w0.", "w1."]
+
+
+# ---------- concurrency during a re-render (review findings) ----------
+
+@pytest.fixture
+def mid_render(monkeypatch):
+    """render_clip that runs `hook()` while 'encoding', then writes its files."""
+    state = {"hook": None, "result": None}
+
+    def fake_render(video, words, start, end, out_dir, name, **k):
+        if state["hook"]:
+            state["result"] = state["hook"]()
+        (out_dir / f"{name}.mp4").write_bytes(b"v")
+        (out_dir / f"{name}.jpg").write_bytes(b"j")
+        return {"layout": "fit", "length": end - start}
+
+    monkeypatch.setattr(render, "render_clip", fake_render)
+    return state
+
+
+def test_delete_clip_is_refused_during_a_rerender(client, mid_render):
+    jid = _job(client)
+    mid_render["hook"] = lambda: client.delete(f"/api/jobs/{jid}/clips/0").status_code
+    assert _edit(client, jid, index=1, start=31.0, end=40.0).status_code == 200
+    assert mid_render["result"] == 409
+    clips = main._jobs[jid]["clips"]
+    assert [c["title"] for c in clips] == ["One", "Two"] and clips[1]["start"] == 31.0
+
+
+def test_delete_job_is_refused_during_a_rerender(client, mid_render):
+    jid = _job(client)
+    mid_render["hook"] = lambda: client.delete(f"/api/jobs/{jid}").status_code
+    assert _edit(client, jid, start=11.0, end=20.0).status_code == 200
+    assert mid_render["result"] == 409
+
+
+def test_publish_is_refused_during_a_rerender(client, mid_render, monkeypatch):
+    from app import youtube
+    monkeypatch.setattr(youtube, "status", lambda: {"connected": True})
+    monkeypatch.setattr(main._upload_pool, "submit", lambda *a: None)
+    jid = _job(client)
+    body = {"title": "t", "made_for_kids": False}
+    mid_render["hook"] = lambda: client.post(f"/api/jobs/{jid}/clips/1/youtube", json=body).status_code
+    assert _edit(client, jid, start=11.0, end=20.0).status_code == 200
+    assert mid_render["result"] == 409
+
+
+def test_title_edit_during_a_rerender_is_not_reverted(client, mid_render):
+    jid = _job(client)
+    mid_render["hook"] = lambda: _edit(client, jid, start=10.0, end=20.0, title="Newer").status_code
+    res = _edit(client, jid, start=11.0, end=20.0)
+    assert mid_render["result"] == 200
+    clip = res.json()["clips"][0]
+    assert clip["title"] == "Newer" and clip["start"] == 11.0
+
+
+def test_old_files_kept_if_the_clip_changed_during_render(client, mid_render):
+    jid = _job(client)
+    d = main._job_dir(jid)
+
+    def swap():
+        main._jobs[jid]["clips"][0]["video"] = f"/media/{jid}/other.mp4"
+
+    mid_render["hook"] = swap
+    res = _edit(client, jid, start=11.0, end=20.0)
+    assert res.status_code == 409
+    assert (d / "clip_01.mp4").exists() and (d / "clip_01.jpg").exists()
+    assert not (d / "clip_01_v2.mp4").exists() and not (d / "clip_01_v2.jpg").exists()
+
+
+def test_trim_is_planned_on_the_spoken_words(client, renders, monkeypatch):
+    seen = {}
+
+    def plan(video, words, s, e):
+        seen["w"] = words
+        return None
+
+    monkeypatch.setattr(trim, "plan", plan)
+    jid = _job(client, trim_pauses=True)
+    _edit(client, jid, start=10.0, end=13.0, text="totally different caption words here")
+    assert "w10" in [w.text for w in seen["w"]]
+    assert renders[0]["words"][0].text == "totally"
+
+
+def test_clearing_a_caption_override_rerenders(client, renders):
+    jid = _job(client)
+    main._jobs[jid]["clips"][0]["text"] = "custom words"
+    res = _edit(client, jid, start=10.0, end=20.0, text=None)
+    assert res.status_code == 200 and len(renders) == 1
+    assert "text" not in res.json()["clips"][0]

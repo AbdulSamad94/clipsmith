@@ -415,6 +415,8 @@ def delete_job(job_id: str) -> dict:
             raise HTTPException(409, "This video is still processing.")
         if any((c.get("youtube") or {}).get("status") in ("queued", "uploading") for c in job.get("clips") or []):
             raise HTTPException(409, "A clip from this video is being posted to YouTube. Wait for it to finish.")
+        if job_id in _editing:
+            raise HTTPException(409, "A clip from this video is being re-rendered. Wait for it to finish.")
         del _jobs[job_id]
     shutil.rmtree(_job_dir(job_id), ignore_errors=True)
     return {"ok": True}
@@ -434,6 +436,9 @@ def delete_clip(job_id: str, index: int) -> dict:
         # Uploads find their clip by position, so removing one would point them at the wrong clip.
         if any((c.get("youtube") or {}).get("status") in ("queued", "uploading") for c in clips):
             raise HTTPException(409, "A clip from this video is being posted to YouTube. Wait for it to finish.")
+        # The editor writes its clip back by position once the render finishes.
+        if job_id in _editing:
+            raise HTTPException(409, "A clip from this video is being re-rendered. Wait for it to finish.")
         clip = clips.pop(index)
         _save(job)
     d = _job_dir(job_id)
@@ -530,28 +535,34 @@ def edit_clip(job_id: str, index: int, req: ClipEdit) -> dict:
         rerender = (
             abs(req.start - clip.get("start", 0)) > 0.005 or abs(req.end - clip.get("end", 0)) > 0.005
             or (text is not None and text != clip.get("text"))
+            or (text is None and clip.get("text") is not None)  # back to the spoken captions
         )
         if rerender:
             if job_id in _editing:
                 raise HTTPException(409, "A clip from this video is already being re-rendered.")
             _editing.add(job_id)
         options = dict(job.get("options") or {})
+    orig_video = clip.get("video")
+    changes: dict = {}
+    old: list = []
+    new_files: list[Path] = []
+    d = _job_dir(job_id)
     try:
         if rerender:
-            video, words = _source_video(job_id), _load_transcript(job_id)
-            if video is None or words is None:
+            video, spoken = _source_video(job_id), _load_transcript(job_id)
+            if video is None or spoken is None:
                 raise HTTPException(
                     409, "The source video for this job wasn't kept, so its clips can't be re-cut. "
                          "You can still change the title.")
-            if text is not None:
-                words = _retime_words(words, req.start, req.end, text)
-            d = _job_dir(job_id)
+            words = _retime_words(spoken, req.start, req.end, text) if text is not None else spoken
             base = re.sub(r"_v\d+$", "", Path(clip["video"]).stem)
             version = 2
             while (d / f"{base}_v{version}.mp4").exists():
                 version += 1
             name = f"{base}_v{version}"
-            keep = trim.plan(video, words, req.start, req.end) if options.get("trim_pauses") else None
+            # Cuts follow what was actually said (pauses, "uh"/"um"), not the edited caption text.
+            keep = trim.plan(video, spoken, req.start, req.end) if options.get("trim_pauses") else None
+            new_files = [d / f"{name}.mp4", d / f"{name}.jpg"]
             # Caption effects (keyword highlight / emoji) only exist on newer jobs and
             # renderers: pass them only when the job asked for them.
             fx = {arg: True for opt, arg in (("highlight_keywords", "highlight"), ("emoji", "emoji"))
@@ -563,29 +574,37 @@ def edit_clip(job_id: str, index: int, req: ClipEdit) -> dict:
                 aspect=options.get("aspect", "9:16"), keep=keep, **fx,
             )
             old = [clip.get("video"), clip.get("thumb")]
-            clip |= {
+            changes = {
                 "start": round(req.start, 2), "end": round(req.end, 2),
                 "length": round(info.get("length", req.end - req.start), 1),
                 "video": f"/media/{job_id}/{name}.mp4", "thumb": f"/media/{job_id}/{name}.jpg",
-                "layout": info["layout"],
+                "layout": info["layout"], "text": text,  # None: captions follow the speech again
             }
-            if text is not None:
-                clip["text"] = text
-            else:
-                clip.pop("text", None)  # captions follow the speech again
-            for url in old:
-                if url:
-                    (d / Path(url).name).unlink(missing_ok=True)
         if req.title is not None and req.title.strip():
-            clip["title"] = req.title.strip()
+            changes["title"] = req.title.strip()
         with _lock:
+            # The render ran without the lock: commit only to the same clip (found by its
+            # video file, not just its position) and only the fields this edit changed.
             job = _jobs.get(job_id)
-            if not job or index >= len(job.get("clips") or []):
-                raise HTTPException(404, "Clip not found.")
-            job["clips"][index] = clip
+            clips = (job or {}).get("clips") or []
+            if not (0 <= index < len(clips) and clips[index].get("video") == orig_video):
+                raise HTTPException(409, "This clip changed while it was being edited. Reload and try again.")
+            current = clips[index]
+            for k, v in changes.items():
+                if v is None:
+                    current.pop(k, None)
+                else:
+                    current[k] = v
             _save(job)
-            return job
+            new_files = []  # committed: keep them
+            result = job
+        for url in old:  # only once the job points at the new files
+            if url:
+                (d / Path(url).name).unlink(missing_ok=True)
+        return result
     finally:
+        for f in new_files:  # render finished but couldn't be committed
+            f.unlink(missing_ok=True)
         if rerender:
             with _lock:
                 _editing.discard(job_id)
@@ -643,6 +662,8 @@ def publish_clip(job_id: str, index: int, req: PublishRequest) -> dict:
             raise HTTPException(409, "This clip changed since you opened it (another clip was deleted). Reload the page and try again.")
         if (clip.get("youtube") or {}).get("status") in ("queued", "uploading"):
             raise HTTPException(409, "This clip is already being posted.")
+        if job_id in _editing:  # the re-render replaces and deletes clip files when it finishes
+            raise HTTPException(409, "A clip from this video is being re-rendered. Wait for it to finish.")
         source_url = job.get("url") if req.add_source_link and _YT.match(job.get("url") or "") else None
         try:
             meta = youtube.build_metadata(
