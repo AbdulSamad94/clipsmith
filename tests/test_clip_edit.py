@@ -1,6 +1,7 @@
 """Clip editor: change a finished clip's start/end, caption text or title and
 re-render just that clip. Rendering and trimming are patched out."""
 import json
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +14,9 @@ YT = "https://www.youtube.com/watch?v=abc123"
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(main._pool, "submit", lambda fn, *a: None)
+    real_submit = main._pool.submit
+    # never run the pipeline; anything else (the editor's encode) really goes to the pool
+    monkeypatch.setattr(main._pool, "submit", lambda fn, *a: None if fn is main._run else real_submit(fn, *a))
     monkeypatch.setattr(main, "_jobs", {})
     return TestClient(main.app)
 
@@ -23,7 +26,8 @@ def renders(monkeypatch):
     calls = []
 
     def fake_render(video, words, start, end, out_dir, name, **k):
-        calls.append({"video": video, "words": words, "start": start, "end": end, "name": name, **k})
+        calls.append({"video": video, "words": words, "start": start, "end": end, "name": name,
+                      "thread": threading.current_thread().name, **k})
         (out_dir / f"{name}.mp4").write_bytes(b"v")
         (out_dir / f"{name}.jpg").write_bytes(b"j")
         return {"layout": "fit", "length": end - start}
@@ -114,6 +118,22 @@ def test_edit_rerenders_with_new_bounds(client, renders):
     # persisted, and the other clip untouched
     saved = json.loads((d / "job.json").read_text(encoding="utf-8"))
     assert saved["clips"][0]["start"] == 12.0 and saved["clips"][1]["title"] == "Two"
+
+
+def test_rerender_runs_on_the_single_encode_pool(client, renders, monkeypatch):
+    """Encodes are one at a time: the editor's render (and trim plan) queue on _pool
+    behind any video being processed, instead of running in the request thread."""
+    threads = {}
+
+    def plan(*a, **k):
+        threads["plan"] = threading.current_thread().name
+        return None
+
+    monkeypatch.setattr(trim, "plan", plan)
+    jid = _job(client, trim_pauses=True)
+    assert _edit(client, jid, start=12.0, end=25.0).status_code == 200
+    assert renders[0]["thread"].startswith("clipsmith-encode")
+    assert threads["plan"].startswith("clipsmith-encode")
 
 
 def test_edit_text_replaces_captions(client, renders):

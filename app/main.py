@@ -60,7 +60,8 @@ async def same_origin_only(request: Request, call_next):
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
-_pool = ThreadPoolExecutor(max_workers=1)  # one video at a time; encoding uses every core
+# One video at a time; encoding uses every core. Clip-editor re-renders queue here too.
+_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipsmith-encode")
 _upload_pool = ThreadPoolExecutor(max_workers=1)  # YouTube uploads don't wait behind rendering
 
 _YT = re.compile(r"^https?://([\w-]+\.)?(youtube\.com|youtu\.be)/", re.I)
@@ -564,19 +565,25 @@ def edit_clip(job_id: str, index: int, req: ClipEdit) -> dict:
             while (d / f"{base}_v{version}.mp4").exists():
                 version += 1
             name = f"{base}_v{version}"
-            # Cuts follow what was actually said (pauses, "uh"/"um"), not the edited caption text.
-            keep = trim.plan(video, spoken, req.start, req.end) if options.get("trim_pauses") else None
             new_files = [d / f"{name}.mp4", d / f"{name}.jpg"]
             # Caption effects (keyword highlight / emoji) only exist on newer jobs and
             # renderers: pass them only when the job asked for them.
             fx = {arg: True for opt, arg in (("highlight_keywords", "highlight"), ("emoji", "emoji"))
                   if options.get(opt) is True}
-            info = render.render_clip(
-                video, words, req.start, req.end, d, name,
-                style=options.get("style", "yellow"), layout=options.get("layout", "auto"),
-                hook=clip.get("hook") if options.get("hook", True) else None,
-                aspect=options.get("aspect", "9:16"), keep=keep, **fx,
-            )
+
+            def encode() -> dict:
+                # Cuts follow what was actually said (pauses, "uh"/"um"), not the edited caption text.
+                keep = trim.plan(video, spoken, req.start, req.end) if options.get("trim_pauses") else None
+                return render.render_clip(
+                    video, words, req.start, req.end, d, name,
+                    style=options.get("style", "yellow"), layout=options.get("layout", "auto"),
+                    hook=clip.get("hook") if options.get("hook", True) else None,
+                    aspect=options.get("aspect", "9:16"), keep=keep, **fx,
+                )
+
+            # Same single worker as the pipeline, so only one encode runs at a time. _lock is
+            # not held here, and _editing already refused a second re-render of this job.
+            info = _pool.submit(encode).result()
             old = [clip.get("video"), clip.get("thumb")]
             changes = {
                 "start": round(req.start, 2), "end": round(req.end, 2),
