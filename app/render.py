@@ -92,15 +92,37 @@ def _faces(entry) -> list[Box]:
     return [entry] if isinstance(entry[0], (int, float)) else list(entry)
 
 
-def track_samples(boxes: list[tuple[float, list[Box] | Box | None]]) -> list[tuple[float, float | None]]:
+def track_samples(
+    boxes: list[tuple[float, list[Box] | Box | None]], sticky: bool = False
+) -> list[tuple[float, float | None]]:
     """Face boxes -> centre-x of the largest face per frame, for camera_path.
     A face under ~7% of frame width is a wide shot (stage, audience);
-    following it gives a jumpy crop."""
+    following it gives a jumpy crop.
+    With sticky (podcast mode), sticks with the face it is already following: another face only takes
+    over when it is clearly bigger (closer to the camera, or the shot changed),
+    so two similar faces don't make the crop flip between people on detector
+    noise."""
     out = []
+    prev: float | None = None
     for t, entry in boxes:
         big = [b for b in _faces(entry) if b[2] >= 0.07]
-        out.append((t, max(big, key=lambda b: b[2] * b[3])[0] if big else None))
+        if not big:
+            out.append((t, None))
+            continue
+        pick = max(big, key=_area)
+        if sticky and prev is not None:
+            same = [b for b in big if abs(b[0] - prev) <= 0.1]
+            if same:
+                cur = max(same, key=_area)
+                if _area(pick) < 1.5 * _area(cur):
+                    pick = cur
+        prev = pick[0]
+        out.append((t, pick[0]))
     return out
+
+
+def _area(b: Box) -> float:
+    return b[2] * b[3]
 
 
 def track_faces(video: Path, start: float, end: float, fps: float = 3.0) -> list[tuple[float, float | None]]:
@@ -186,6 +208,52 @@ def split_layout(
         return (x, y, w, h)
 
     return {"cam": rect(cam_x, cam_y, cw, ch), "game": rect(gx, gy, gw, gh), "top_h": top_h, "bottom_h": bottom_h}
+
+
+def podcast_pair(boxes: list[tuple[float, list[Box] | Box | None]]) -> tuple[Box, Box] | None:
+    """Two people sitting side by side (interview, podcast): one steady face on
+    each half of the frame, both on screen in most frames. Returns their median
+    boxes (left, right), or None for one speaker, a wide shot, or a second face
+    that only shows up now and then."""
+    left: list[Box] = []
+    right: list[Box] = []
+    for _, entry in boxes:
+        big = [b for b in _faces(entry) if b[2] >= 0.07]
+        lb = [b for b in big if b[0] < 0.5]
+        rb = [b for b in big if b[0] >= 0.5]
+        if lb and rb:
+            left.append(max(lb, key=_area))
+            right.append(max(rb, key=_area))
+    if len(left) < max(3, 0.4 * len(boxes)):
+        return None
+    for side in (left, right):
+        if statistics.pstdev([b[0] for b in side]) > 0.08:
+            return None  # moving around: not two seated speakers
+    pair = tuple(tuple(statistics.median(b[k] for b in side) for k in range(4)) for side in (left, right))
+    if pair[1][0] - pair[0][0] < 0.25:
+        return None  # so close that each crop would show both people
+    return pair
+
+
+def podcast_layout(src_w: int, src_h: int, a: Box, b: Box, out_w: int, out_h: int) -> dict | None:
+    """Crops for two speakers stacked in a tall frame, the left one on top.
+    Each crop is about 2.6 face-heights tall, shaped like its half of the
+    output so nothing is stretched. None for a frame that isn't tall."""
+    if out_w >= out_h:
+        return None
+    top_h = _even(out_h / 2)
+    out: dict = {"top_h": top_h, "bottom_h": out_h - top_h}
+    for key, (cx, cy, _, fh) in zip(("top", "bottom"), sorted((a, b), key=lambda f: f[0])):
+        ph = out[f"{key}_h"]
+        ch = min(src_h, fh * src_h * 2.6)
+        cw = ch * out_w / ph
+        if cw > src_w:
+            cw, ch = src_w, src_w * ph / out_w
+        w, h = _even(cw), _even(ch)
+        x = int(min(max(0, cx * src_w - w / 2), src_w - w)) // 2 * 2
+        y = int(min(max(0, cy * src_h - h * 0.4), src_h - h)) // 2 * 2
+        out[key] = (x, y, w, h)
+    return out
 
 
 def camera_path(samples: list[tuple[float, float | None]], deadzone: float = 0.09) -> list[tuple[float, float]] | None:
@@ -373,17 +441,27 @@ def render_clip(
     keys = None
     split = None
     tall = out_r < 1  # stacking two panels only makes sense in a tall frame
-    if layout in ("auto", "fill", "split") and not vertical_already:
+    pod = None
+    sticky = False
+    if layout in ("auto", "fill", "split", "podcast") and not vertical_already:
         boxes = detect_faces(video, start, end) if facecam is None else []
+        if layout == "podcast":
+            pair = podcast_pair(boxes) if tall else None
+            pod = podcast_layout(src_w, src_h, *pair, W, H) if pair else None
+            if pod:
+                used = "podcast"
+            else:
+                layout = "auto"  # not two speakers: follow the main face instead
+                sticky = True
         if layout in ("auto", "split") and tall:
             cam = facecam or facecam_from_faces(boxes)
             split = split_layout(src_w, src_h, cam, W, H) if cam else None
             if split:
                 used = "split"
-        if split is None:
+        if split is None and pod is None:
             if layout == "split":
                 layout = "auto"  # asked for split but no facecam found: pick the next best layout
-            keys = camera_path(track_samples(boxes)) if layout in ("auto", "fill") else None
+            keys = camera_path(track_samples(boxes, sticky=sticky)) if layout in ("auto", "fill") else None
             if layout == "auto":
                 used = "fill" if keys else "fit"
             elif keys is None:
@@ -406,7 +484,7 @@ def render_clip(
             shutil.copyfile(FONTS_DIR / f, fonts / f)
     ass_f = f"ass={ass_name}:fontsdir=fonts"
     (out_dir / ass_name).write_text(
-        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=split["top_h"] if split else None),
+        build_ass(cap_words, cap_start, out_len, style, hook, size=(W, H), hook_top=(split or pod)["top_h"] if (split or pod) else None),
         encoding="utf-8",
     )
 
@@ -418,6 +496,15 @@ def render_clip(
             f"[a]crop={cw}:{ch}:{cx}:{cy},scale={W}:{split['top_h']}:flags=lanczos,setsar=1[cam];"
             f"[b]crop={gw}:{gh}:{gx}:{gy},scale={W}:{split['bottom_h']}:flags=lanczos,setsar=1[game];"
             f"[cam][game]vstack,{ass_f}[v]"
+        )
+    elif pod:
+        tx, ty, tw, th = pod["top"]
+        bx, by, bw, bh = pod["bottom"]
+        graph = (
+            f"[0:v]split[a][b];"
+            f"[a]crop={tw}:{th}:{tx}:{ty},scale={W}:{pod['top_h']}:flags=lanczos,setsar=1[top];"
+            f"[b]crop={bw}:{bh}:{bx}:{by},scale={W}:{pod['bottom_h']}:flags=lanczos,setsar=1[bot];"
+            f"[top][bot]vstack,{ass_f}[v]"
         )
     elif vertical_already:
         used = "source"

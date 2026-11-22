@@ -277,7 +277,7 @@ def _check_options(req: JobRequest) -> None:
         raise HTTPException(400, "Minimum length must be shorter than maximum length.")
     if req.style not in render.STYLES:
         raise HTTPException(400, "Unknown caption style.")
-    if req.layout not in ("auto", "fill", "fit", "split"):
+    if req.layout not in ("auto", "fill", "fit", "split", "podcast"):
         raise HTTPException(400, "Unknown layout.")
     if req.start_time is not None and req.end_time is not None and req.end_time <= req.start_time:
         raise HTTPException(400, "The 'To' time must be after the 'From' time.")
