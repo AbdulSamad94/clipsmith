@@ -101,15 +101,24 @@ def test_tracking_sticks_with_the_same_face_when_sizes_are_close():
     for i in range(30):
         a, b = (0.20, 0.21) if i % 2 else (0.21, 0.20)
         frames.append((i / 3, [(0.3, 0.4, a, a), (0.7, 0.4, b, b)]))
-    xs = {x for _, x in render.track_samples(frames)}
+    xs = {x for _, x in render.track_samples(frames, sticky=True)}
     assert len(xs) == 1
 
 
 def test_tracking_switches_to_a_clearly_bigger_face():
     frames = [(i / 3, [(0.3, 0.4, 0.15, 0.2)]) for i in range(5)]
     frames += [(5 + i / 3, [(0.3, 0.4, 0.10, 0.15), (0.7, 0.4, 0.3, 0.4)]) for i in range(5)]
-    xs = [x for _, x in render.track_samples(frames)]
+    xs = [x for _, x in render.track_samples(frames, sticky=True)]
     assert xs[0] == 0.3 and xs[-1] == 0.7
+
+
+def test_default_tracking_still_follows_the_largest_face_each_frame():
+    """Default framing must match the original behaviour: stickiness is podcast-only."""
+    frames = []
+    for i in range(6):
+        a, b = (0.20, 0.21) if i % 2 else (0.21, 0.20)
+        frames.append((i / 3, [(0.3, 0.4, a, a), (0.7, 0.4, b, b)]))
+    assert [x for _, x in render.track_samples(frames)] == [0.3, 0.7, 0.3, 0.7, 0.3, 0.7]
 
 
 # ---------- API ----------

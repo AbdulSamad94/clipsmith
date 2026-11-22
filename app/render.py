@@ -92,11 +92,13 @@ def _faces(entry) -> list[Box]:
     return [entry] if isinstance(entry[0], (int, float)) else list(entry)
 
 
-def track_samples(boxes: list[tuple[float, list[Box] | Box | None]]) -> list[tuple[float, float | None]]:
+def track_samples(
+    boxes: list[tuple[float, list[Box] | Box | None]], sticky: bool = False
+) -> list[tuple[float, float | None]]:
     """Face boxes -> centre-x of the largest face per frame, for camera_path.
     A face under ~7% of frame width is a wide shot (stage, audience);
     following it gives a jumpy crop.
-    Sticks with the face it is already following: another face only takes
+    With sticky (podcast mode), sticks with the face it is already following: another face only takes
     over when it is clearly bigger (closer to the camera, or the shot changed),
     so two similar faces don't make the crop flip between people on detector
     noise."""
@@ -108,7 +110,7 @@ def track_samples(boxes: list[tuple[float, list[Box] | Box | None]]) -> list[tup
             out.append((t, None))
             continue
         pick = max(big, key=_area)
-        if prev is not None:
+        if sticky and prev is not None:
             same = [b for b in big if abs(b[0] - prev) <= 0.1]
             if same:
                 cur = max(same, key=_area)
@@ -440,6 +442,7 @@ def render_clip(
     split = None
     tall = out_r < 1  # stacking two panels only makes sense in a tall frame
     pod = None
+    sticky = False
     if layout in ("auto", "fill", "split", "podcast") and not vertical_already:
         boxes = detect_faces(video, start, end) if facecam is None else []
         if layout == "podcast":
@@ -449,6 +452,7 @@ def render_clip(
                 used = "podcast"
             else:
                 layout = "auto"  # not two speakers: follow the main face instead
+                sticky = True
         if layout in ("auto", "split") and tall:
             cam = facecam or facecam_from_faces(boxes)
             split = split_layout(src_w, src_h, cam, W, H) if cam else None
@@ -457,7 +461,7 @@ def render_clip(
         if split is None and pod is None:
             if layout == "split":
                 layout = "auto"  # asked for split but no facecam found: pick the next best layout
-            keys = camera_path(track_samples(boxes)) if layout in ("auto", "fill") else None
+            keys = camera_path(track_samples(boxes, sticky=sticky)) if layout in ("auto", "fill") else None
             if layout == "auto":
                 used = "fill" if keys else "fit"
             elif keys is None:
