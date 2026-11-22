@@ -235,6 +235,7 @@ def mid_render(monkeypatch):
         return {"layout": "fit", "length": end - start}
 
     monkeypatch.setattr(render, "render_clip", fake_render)
+    monkeypatch.setattr(trim, "plan", lambda *a, **k: None)  # trim_pauses defaults on; plan runs ffmpeg
     return state
 
 
