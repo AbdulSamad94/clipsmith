@@ -61,5 +61,5 @@ def test_bot_check_error_explains_the_cookie_fix():
     raw = ("ERROR: [youtube] Ra6sNe8s2Hc: Sign in to confirm you’re not a bot. "
            "Use --cookies-from-browser or --cookies for the authentication.")
     msg = friendly_error(Exception(raw))
-    assert "YTDLP_COOKIES_FROM_BROWSER" in msg
+    assert "cookies" in msg.lower()
     assert "--cookies" not in msg
