@@ -161,6 +161,8 @@
   .dlg .btns button { min-height: 44px; padding: 0 20px; font-weight: 700; }
   .dlg .err { color: var(--bad); font-size: 14.5px; }
   .dlg .err:empty { display: none; }
+  .dlg input[type=number] { width: 100%; min-height: 46px; background: var(--bg); color: var(--text); border: 1px solid #3a3f4d; border-radius: 10px; padding: 9px 12px; }
+  #edReload { min-height: 44px; padding: 0 14px; margin-top: 6px; }
   @media (max-width: 560px) { .dlg .two { grid-template-columns: 1fr; } }
 
   /* ---------- Settings ---------- */
@@ -571,6 +573,25 @@
   </form>
 </dialog>
 
+<dialog id="eddlg" aria-labelledby="eddlgTitle">
+  <form class="dlg" id="edform" method="dialog">
+    <h2 id="eddlgTitle">Edit clip <span class="sub" id="edWhich"></span></h2>
+    <div><label class="lbl" for="edTitle">Title</label><input type="text" id="edTitle" maxlength="500"></div>
+    <div class="two">
+      <div><label class="lbl" for="edStart">Start (seconds into the video)</label>
+        <input type="number" id="edStart" min="0" step="0.1" required inputmode="decimal" aria-describedby="edLenHint"></div>
+      <div><label class="lbl" for="edEnd">End (seconds into the video)</label>
+        <input type="number" id="edEnd" min="0" step="0.1" required inputmode="decimal" aria-describedby="edLenHint"></div>
+    </div>
+    <p class="hint" id="edLenHint" aria-live="polite"></p>
+    <div><label class="lbl" for="edText">Caption text</label><textarea id="edText" maxlength="5000" aria-describedby="edTextHint"></textarea>
+      <p class="hint" id="edTextHint">Fix a word and it keeps its timing. Add or remove words and the captions are spread over the speech. Leave it empty for no captions.</p>
+      <button type="button" class="ghost" id="edReload">Reset to what's said in this range</button></div>
+    <div class="err" id="ederr" role="alert"></div>
+    <div class="btns"><button type="button" class="ghost" id="edCancel">Cancel</button><button type="submit" class="go" id="edSubmit">Save and re-render</button></div>
+  </form>
+</dialog>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -928,6 +949,79 @@ $("#ytform").addEventListener("submit", async (e) => {
   }
 });
 
+// ---------- Clip editor ----------
+let editing = null; // { job, index, video, textTouched }
+
+async function loadTranscript() {
+  if (!editing) return;
+  const start = +$("#edStart").value, end = +$("#edEnd").value;
+  if (!(end > start)) return;
+  try {
+    const t = await api(`/api/jobs/${editing.job}/transcript?start=${start}&end=${end}`);
+    $("#edText").value = t.text;
+    editing.textTouched = false;
+  } catch (err) { $("#ederr").textContent = err.message; }
+}
+
+function updateLen() {
+  const len = +$("#edEnd").value - +$("#edStart").value;
+  $("#edLenHint").textContent = len > 0 ? `Clip length: ${len.toFixed(1)} seconds.` : "End must be after start.";
+}
+
+function openEdit(jobId, index) {
+  const job = jobs.find((j) => j.id === jobId);
+  const c = job && job.clips[index];
+  if (!c) return;
+  editing = { job: jobId, index, video: c.video, textTouched: false };
+  returnFocus = document.activeElement;
+  $("#edWhich").textContent = `· clip ${index + 1}`;
+  $("#edTitle").value = c.title || "";
+  $("#edStart").value = c.start;
+  $("#edEnd").value = c.end;
+  if (job.duration) { $("#edStart").max = job.duration; $("#edEnd").max = job.duration; }
+  $("#edText").value = c.text || "";
+  $("#ederr").textContent = "";
+  updateLen();
+  $("#eddlg").showModal();
+  if (c.text == null) loadTranscript();
+}
+
+$("#edStart").addEventListener("input", updateLen);
+$("#edEnd").addEventListener("input", updateLen);
+$("#edText").addEventListener("input", () => { if (editing) editing.textTouched = true; });
+$("#edReload").addEventListener("click", loadTranscript);
+$("#edCancel").addEventListener("click", () => $("#eddlg").close());
+$("#eddlg").addEventListener("close", () => { if (returnFocus && document.contains(returnFocus)) returnFocus.focus(); });
+
+$("#edform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!editing) return;
+  const start = +$("#edStart").value, end = +$("#edEnd").value;
+  if (!(end > start)) { $("#ederr").textContent = "End must be after start."; return; }
+  const job = jobs.find((j) => j.id === editing.job);
+  const c = job && job.clips[editing.index];
+  if (!c || c.video !== editing.video) { $("#ederr").textContent = "This clip changed. Close and open the editor again."; return; }
+  // Only send caption text the user wrote; otherwise the server captions what's said.
+  const text = editing.textTouched || c.text != null ? $("#edText").value : null;
+  const btn = $("#edSubmit");
+  btn.disabled = true;
+  btn.textContent = "Re-rendering…";
+  try {
+    await api(`/api/jobs/${editing.job}/clips/${editing.index}/edit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start, end, title: $("#edTitle").value, text }),
+    });
+    $("#eddlg").close();
+    toast("Clip saved.");
+    await refresh();
+  } catch (err) {
+    $("#ederr").textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Save and re-render";
+  }
+});
+
 async function refresh() {
   try { jobs = await api("/api/jobs"); } catch { return; }
   render();
@@ -1260,6 +1354,7 @@ function toast(msg) {
 // returns focus to the ⋯ button, Tab or a click outside closes it.
 const menu = { el: null, btn: null, job: null, index: null };
 const MI = {
+  edit: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>`,
   copy: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`,
   yt: `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" fill="#ff3b30"/><path d="M10 9v6l5-3z" fill="#fff"/></svg>`,
   open: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>`,
@@ -1277,6 +1372,7 @@ function openMenu(btn, jobId, index) {
     `<button role="menuitem" type="button" data-act="copy">${MI.copy}Copy title, description and hashtags</button>`,
     st === "done" && c.youtube.url ? `<button role="menuitem" type="button" data-act="open">${MI.open}Open on YouTube</button>` : "",
     `<button role="menuitem" type="button" data-act="post" ${busy ? 'aria-disabled="true"' : ""}>${MI.yt}${st === "done" ? "Post to YouTube again" : busy ? "Uploading to YouTube…" : "Post to YouTube"}</button>`,
+    `<button role="menuitem" type="button" data-act="edit" ${busy || job.status !== "done" ? 'aria-disabled="true"' : ""}>${MI.edit}Edit start, end and captions</button>`,
     `<div class="menu-sep" role="separator"></div>`,
     `<button role="menuitem" type="button" data-act="delete" class="danger" ${busy ? 'aria-disabled="true"' : ""}>${MI.del}Delete this clip</button>`,
   ].join("");
@@ -1342,6 +1438,8 @@ async function menuClick(e) {
     window.open(c.youtube.url, "_blank", "noopener");
   } else if (act === "post") {
     openPost(jobId, index);
+  } else if (act === "edit") {
+    openEdit(jobId, index);
   } else if (act === "delete") {
     if (!confirm(`Delete clip ${index + 1}, "${c.title}"? This removes the video file and can't be undone.`)) return;
     try {

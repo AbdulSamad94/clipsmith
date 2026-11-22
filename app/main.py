@@ -245,9 +245,12 @@ def _run(job_id: str, req: JobRequest) -> None:
             )
             _update(job_id, clips=list(done))
 
-        src.video_path.unlink(missing_ok=True)  # the source is large; clips are what matter
+        # Keep the source video and its transcript so a clip can be re-cut later
+        # in the clip editor; both go when the job is deleted.
+        _save_transcript(job_id, src.words)
         for leftover in workdir.glob("source.*"):
-            leftover.unlink(missing_ok=True)
+            if leftover != src.video_path:
+                leftover.unlink(missing_ok=True)
         _update(job_id, status="done", progress=100, message="Done")
     except Exception as exc:
         traceback.print_exc()
@@ -438,6 +441,150 @@ def delete_clip(job_id: str, index: int) -> dict:
         if url:
             (d / Path(url).name).unlink(missing_ok=True)
     return {"ok": True}
+
+
+# ---------- Clip editor ----------
+# Re-cut one finished clip: new start/end, edited caption text or title. The
+# source video and word timings are kept in the job folder for this.
+
+_TRANSCRIPT = "transcript.json"
+_editing: set[str] = set()  # jobs with a clip re-render in progress
+
+
+def _save_transcript(job_id: str, words: list) -> None:
+    data = [[w.text, round(w.start, 3), round(w.end, 3)] for w in words]
+    (_job_dir(job_id) / _TRANSCRIPT).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_transcript(job_id: str) -> list[source.Word] | None:
+    try:
+        data = json.loads((_job_dir(job_id) / _TRANSCRIPT).read_text(encoding="utf-8"))
+        return [source.Word(str(t), float(s), float(e)) for t, s, e in data]
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _source_video(job_id: str) -> Path | None:
+    return next((p for p in _job_dir(job_id).glob("source.*") if p.suffix != ".part"), None)
+
+
+def _retime_words(words: list, start: float, end: float, text: str) -> list[source.Word]:
+    """Captions for edited text. Same number of words: each keeps its spoken
+    timing (typo fixes stay in sync). Otherwise the new words are spread over
+    the span that was spoken, weighted by length; with no speech, the clip."""
+    tokens = text.split()
+    spoken = [w for w in words if w.end > start and w.start < end]
+    if not tokens:
+        return []
+    if len(tokens) == len(spoken):
+        return [source.Word(t, w.start, w.end) for t, w in zip(tokens, spoken)]
+    a, b = (spoken[0].start, spoken[-1].end) if spoken else (start, end)
+    a, b = max(a, start), min(b, end)
+    weights = [len(t) + 1 for t in tokens]
+    total, t0, out = sum(weights), a, []
+    for tok, wt in zip(tokens, weights):
+        t1 = t0 + (b - a) * wt / total
+        out.append(source.Word(tok, round(t0, 3), round(t1, 3)))
+        t0 = t1
+    return out
+
+
+@app.get("/api/jobs/{job_id}/transcript")
+def get_transcript(job_id: str, start: float, end: float) -> dict:
+    with _lock:
+        if job_id not in _jobs:
+            raise HTTPException(404, "Job not found.")
+    words = _load_transcript(job_id)
+    if words is None:
+        raise HTTPException(409, "The transcript for this video wasn't kept.")
+    return {"text": " ".join(w.text for w in words if w.end > start and w.start < end)}
+
+
+class ClipEdit(BaseModel):
+    start: float = Field(allow_inf_nan=False)
+    end: float = Field(allow_inf_nan=False)
+    title: str | None = Field(default=None, max_length=500)
+    text: str | None = Field(default=None, max_length=5000)  # caption text; None = as spoken
+
+
+@app.post("/api/jobs/{job_id}/clips/{index}/edit")
+def edit_clip(job_id: str, index: int, req: ClipEdit) -> dict:
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found.")
+        clips = job.get("clips") or []
+        if not 0 <= index < len(clips):
+            raise HTTPException(404, "Clip not found.")
+        if job["status"] != "done":
+            raise HTTPException(409, "This video is still processing.")
+        if any((c.get("youtube") or {}).get("status") in ("queued", "uploading") for c in clips):
+            raise HTTPException(409, "A clip from this video is being posted to YouTube. Wait for it to finish.")
+        clip = dict(clips[index])
+        duration = job.get("duration") or 0
+        if not (0 <= req.start < req.end) or (duration and req.end > duration + 0.01):
+            raise HTTPException(400, "Start must be before end, and both inside the video.")
+        if req.end - req.start < 1:
+            raise HTTPException(400, "A clip must be at least 1 second long.")
+        text = req.text.strip() if req.text is not None else None
+        rerender = (
+            abs(req.start - clip.get("start", 0)) > 0.005 or abs(req.end - clip.get("end", 0)) > 0.005
+            or (text is not None and text != clip.get("text"))
+        )
+        if rerender:
+            if job_id in _editing:
+                raise HTTPException(409, "A clip from this video is already being re-rendered.")
+            _editing.add(job_id)
+        options = dict(job.get("options") or {})
+    try:
+        if rerender:
+            video, words = _source_video(job_id), _load_transcript(job_id)
+            if video is None or words is None:
+                raise HTTPException(
+                    409, "The source video for this job wasn't kept, so its clips can't be re-cut. "
+                         "You can still change the title.")
+            if text is not None:
+                words = _retime_words(words, req.start, req.end, text)
+            d = _job_dir(job_id)
+            base = re.sub(r"_v\d+$", "", Path(clip["video"]).stem)
+            version = 2
+            while (d / f"{base}_v{version}.mp4").exists():
+                version += 1
+            name = f"{base}_v{version}"
+            keep = trim.plan(video, words, req.start, req.end) if options.get("trim_pauses") else None
+            info = render.render_clip(
+                video, words, req.start, req.end, d, name,
+                style=options.get("style", "yellow"), layout=options.get("layout", "auto"),
+                hook=clip.get("hook") if options.get("hook", True) else None,
+                aspect=options.get("aspect", "9:16"), keep=keep,
+            )
+            old = [clip.get("video"), clip.get("thumb")]
+            clip |= {
+                "start": round(req.start, 2), "end": round(req.end, 2),
+                "length": round(info.get("length", req.end - req.start), 1),
+                "video": f"/media/{job_id}/{name}.mp4", "thumb": f"/media/{job_id}/{name}.jpg",
+                "layout": info["layout"],
+            }
+            if text is not None:
+                clip["text"] = text
+            else:
+                clip.pop("text", None)  # captions follow the speech again
+            for url in old:
+                if url:
+                    (d / Path(url).name).unlink(missing_ok=True)
+        if req.title is not None and req.title.strip():
+            clip["title"] = req.title.strip()
+        with _lock:
+            job = _jobs.get(job_id)
+            if not job or index >= len(job.get("clips") or []):
+                raise HTTPException(404, "Clip not found.")
+            job["clips"][index] = clip
+            _save(job)
+            return job
+    finally:
+        if rerender:
+            with _lock:
+                _editing.discard(job_id)
 
 
 # ---------- YouTube ----------
