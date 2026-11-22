@@ -41,7 +41,7 @@ Paste a YouTube link. Clipsmith finds the best 30–60 second moments, crops the
 
 1. **Downloads** the video and YouTube's captions (or transcribes the audio with Whisper if there are none).
 2. **Picks the moments** that open strong, stand on their own and end on a complete thought, and gives each a viral score, a title, an on-screen hook, a caption and hashtags.
-3. **Reframes** to 9:16, following the speaker's face (it sticks with one person instead of flipping between similar faces). Wide shots get the full frame over a blurred background instead. **Podcast** framing stacks two side-by-side speakers top and bottom, each cropped around their face; with only one face it falls back to following the speaker.
+3. **Reframes** to 9:16, following the speaker's face. Wide shots get the full frame over a blurred background instead. **Podcast** framing stacks two side-by-side speakers top and bottom, each cropped around their face; with only one face it falls back to following the speaker, sticking with one person instead of flipping between similar faces.
 4. **Captions** every word as it's spoken, in one of three styles.
 5. **Exports** MP4s you can download, or post and schedule straight to YouTube.
 
