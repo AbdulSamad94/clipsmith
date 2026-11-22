@@ -174,6 +174,21 @@ def test_clip_being_uploaded_is_409(client, renders):
     assert _edit(client, jid, start=11.0, end=20.0).status_code == 409
 
 
+def test_caption_fx_options_are_forwarded_when_saved(client, renders):
+    jid = _job(client)
+    main._jobs[jid]["options"].update(highlight_keywords=True, emoji=True)
+    assert _edit(client, jid, start=11.0, end=20.0).status_code == 200
+    assert renders[0]["highlight"] is True and renders[0]["emoji"] is True
+
+
+def test_caption_fx_options_not_passed_when_absent(client, renders):
+    jid = _job(client)
+    for k in ("highlight_keywords", "emoji"):
+        main._jobs[jid]["options"].pop(k, None)
+    assert _edit(client, jid, start=11.0, end=20.0).status_code == 200
+    assert "highlight" not in renders[0] and "emoji" not in renders[0]
+
+
 def test_cross_origin_edit_is_refused(client, renders):
     jid = _job(client)
     res = client.post(f"/api/jobs/{jid}/clips/0/edit", json={"start": 11.0, "end": 20.0},

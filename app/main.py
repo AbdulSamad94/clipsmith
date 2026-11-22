@@ -552,11 +552,15 @@ def edit_clip(job_id: str, index: int, req: ClipEdit) -> dict:
                 version += 1
             name = f"{base}_v{version}"
             keep = trim.plan(video, words, req.start, req.end) if options.get("trim_pauses") else None
+            # Caption effects (keyword highlight / emoji) only exist on newer jobs and
+            # renderers: pass them only when the job asked for them.
+            fx = {arg: True for opt, arg in (("highlight_keywords", "highlight"), ("emoji", "emoji"))
+                  if options.get(opt) is True}
             info = render.render_clip(
                 video, words, req.start, req.end, d, name,
                 style=options.get("style", "yellow"), layout=options.get("layout", "auto"),
                 hook=clip.get("hook") if options.get("hook", True) else None,
-                aspect=options.get("aspect", "9:16"), keep=keep,
+                aspect=options.get("aspect", "9:16"), keep=keep, **fx,
             )
             old = [clip.get("video"), clip.get("thumb")]
             clip |= {
