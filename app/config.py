@@ -13,6 +13,8 @@ DATA_DIR = Path(os.environ.get("CLIPSMITH_DATA_DIR") or ROOT / "data")
 JOBS_DIR = DATA_DIR / "jobs"
 MODELS_DIR = DATA_DIR / "models"
 STATIC_DIR = ROOT / "static"
+# A cookies.txt uploaded from the page, for YouTube's "confirm you're not a bot" check.
+COOKIES_FILE = DATA_DIR / "youtube_cookies.txt"
 
 for _d in (JOBS_DIR, MODELS_DIR):
     _d.mkdir(parents=True, exist_ok=True)

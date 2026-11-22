@@ -144,6 +144,14 @@ def _clock(t: float) -> str:
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def error_code(exc: BaseException) -> str | None:
+    """A stable tag for errors the page can offer a fix for."""
+    low = str(exc).lower()
+    if "confirm you" in low and "not a bot" in low:
+        return "bot_check"
+    return None
+
+
 def friendly_error(exc: BaseException) -> str:
     """Turn a pipeline exception (often raw yt-dlp output) into a message for the page."""
     text = _ANSI.sub("", str(exc)).strip()
@@ -151,10 +159,9 @@ def friendly_error(exc: BaseException) -> str:
     low = text.lower()
     if "getaddrinfo" in low or "failed to resolve" in low or "connection refused" in low or "timed out" in low:
         return "Couldn't reach YouTube. Check your internet connection and try again."
-    if "confirm you" in low and "not a bot" in low:
-        return ("YouTube asked to confirm you're not a bot. Sign in to YouTube in Firefox, then add "
-                "YTDLP_COOKIES_FROM_BROWSER=firefox to your .env (or YTDLP_COOKIES_FILE=<path to cookies.txt>) "
-                "and restart Clipsmith. Or download the video yourself and upload the file.")
+    if error_code(exc) == "bot_check":
+        return ("YouTube wants to confirm you're not a bot. Add your YouTube cookies "
+                "(takes about a minute) and try again, or download the video yourself and upload the file.")
     if "429" in low or "too many requests" in low:
         return "YouTube is limiting requests from your connection right now. Wait a few minutes and try again."
     text = re.sub(r"^\[\w+\]\s*[\w-]+:\s*", "", text)  # drop yt-dlp's "[youtube] <id>: " prefix
@@ -261,7 +268,7 @@ def _run(job_id: str, req: JobRequest) -> None:
         _update(job_id, status="done", progress=100, message="Done")
     except Exception as exc:
         traceback.print_exc()
-        _update(job_id, status="error", error=friendly_error(exc)[:500])
+        _update(job_id, status="error", error=friendly_error(exc)[:500], error_code=error_code(exc))
 
 
 @app.get("/api/status")
@@ -661,6 +668,52 @@ def youtube_connect(request: Request) -> RedirectResponse:
 def youtube_disconnect() -> dict:
     youtube.disconnect()
     return {"ok": True}
+
+
+# ---------- YouTube cookies (for "Sign in to confirm you're not a bot") ----------
+
+_MAX_COOKIES_BYTES = 1024 * 1024
+
+
+def _cookies_status() -> dict:
+    src = source.cookie_source()
+    added = None
+    if src == "upload":
+        added = datetime.fromtimestamp(config.COOKIES_FILE.stat().st_mtime).isoformat(timespec="seconds")
+    return {"set": src is not None, "source": src, "added": added}
+
+
+@app.get("/api/cookies")
+def cookies_status() -> dict:
+    return _cookies_status()
+
+
+@app.post("/api/cookies")
+async def upload_cookies(file: UploadFile = File(...)) -> dict:
+    data = await file.read(_MAX_COOKIES_BYTES + 1)
+    if len(data) > _MAX_COOKIES_BYTES:
+        raise HTTPException(413, "That file is too big for a cookies.txt (limit 1 MB).")
+    text = data.decode("utf-8", errors="replace")
+    try:
+        source.check_cookies(text)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    # Write then swap, so a failed write never leaves half a file. Cookies are a login:
+    # keep them readable by this user only where the OS supports it.
+    tmp = config.COOKIES_FILE.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, config.COOKIES_FILE)
+    return _cookies_status()
+
+
+@app.delete("/api/cookies")
+def delete_cookies() -> dict:
+    config.COOKIES_FILE.unlink(missing_ok=True)
+    return _cookies_status()
 
 
 @app.post("/api/jobs/{job_id}/clips/{index}/youtube")

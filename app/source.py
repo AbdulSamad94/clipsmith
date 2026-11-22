@@ -46,20 +46,60 @@ def _ydl_base() -> dict:
     return opts
 
 
+def cookie_source() -> str | None:
+    """Where YouTube cookies come from: "env" (YTDLP_COOKIES_FILE), "upload" (the page),
+    "browser" (YTDLP_COOKIES_FROM_BROWSER), or None. Same order as _cookie_opts."""
+    if os.environ.get("YTDLP_COOKIES_FILE", "").strip():
+        return "env"
+    if config.COOKIES_FILE.is_file():
+        return "upload"
+    if os.environ.get("YTDLP_COOKIES_FROM_BROWSER", "").strip():
+        return "browser"
+    return None
+
+
 def _cookie_opts() -> dict:
-    """Cookies for YouTube's "confirm you're not a bot" check, from .env.
-    YTDLP_COOKIES_FILE (an exported cookies.txt) wins over YTDLP_COOKIES_FROM_BROWSER
-    ("firefox" or "firefox:<profile>"). Read at call time so .env edits apply per job."""
+    """Cookies for YouTube's "confirm you're not a bot" check. In order: YTDLP_COOKIES_FILE
+    from .env, then a cookies.txt uploaded from the page, then YTDLP_COOKIES_FROM_BROWSER
+    ("firefox" or "firefox:<profile>"). Read at call time so changes apply to the next job."""
     path = os.environ.get("YTDLP_COOKIES_FILE", "").strip().strip('"')
     if path:
         if not Path(path).is_file():
             raise RuntimeError(f"YTDLP_COOKIES_FILE points to a file that doesn't exist: {path}")
         return {"cookiefile": path}
+    if config.COOKIES_FILE.is_file():
+        return {"cookiefile": str(config.COOKIES_FILE)}
     browser = os.environ.get("YTDLP_COOKIES_FROM_BROWSER", "").strip()
     if browser:
         name, _, profile = browser.partition(":")
         return {"cookiesfrombrowser": (name.strip().lower(), profile.strip() or None, None, None)}
     return {}
+
+
+_COOKIE_DOMAINS = ("youtube.com", "google.com")
+
+
+def check_cookies(text: str) -> int:
+    """Check an uploaded cookies.txt is the Netscape format yt-dlp reads and has YouTube or
+    Google cookies. Returns how many such cookies it has; raises ValueError with a reason."""
+    count = 0
+    for line in text.lstrip("﻿").splitlines():
+        line = line.strip()
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+        elif not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 7:
+            continue
+        domain = fields[0].lstrip(".").lower()
+        if any(domain == d or domain.endswith("." + d) for d in _COOKIE_DOMAINS):
+            count += 1
+    if not count:
+        raise ValueError(
+            "That isn't a YouTube cookies.txt. Export it from youtube.com with the "
+            '"Get cookies.txt LOCALLY" extension, in Netscape format, while signed in.')
+    return count
 
 
 def download(url: str, workdir: Path, progress: Progress) -> Source:
