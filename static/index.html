@@ -202,6 +202,8 @@
   .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #e6e8ee; transition: transform .2s; }
   .switch input:checked { background: var(--accent); }
   .switch input:checked::after { transform: translateX(20px); background: var(--accent-ink); }
+  .switch input:disabled { opacity: .5; cursor: not-allowed; }
+  .capfx { margin-top: 12px; }
 
   /* ---------- Clip list: one clip per row, video on the left, details on the right ---------- */
   .grid { grid-template-columns: 1fr; gap: 14px; }
@@ -498,6 +500,10 @@
       <fieldset class="setting wide">
         <legend>Caption style <span class="legend-note">preview shows how captions look on the video</span></legend>
         <div class="capstyles" id="style"></div>
+        <div class="switches capfx">
+          <label class="switch"><span><b>Highlight key words</b><small>Numbers and strong words get their own colour and pop in as they are spoken</small></span><input type="checkbox" role="switch" id="highlight"></label>
+          <label class="switch"><span><b>Add emoji to key words</b><small>Off by default. Needs "Highlight key words"</small></span><input type="checkbox" role="switch" id="emoji" disabled></label>
+        </div>
       </fieldset>
       <div class="setting">
         <label for="layout">Framing</label>
@@ -603,6 +609,17 @@ async function init() {
   await loadYouTube();
   await refresh();
 }
+
+// ---------- caption keyword / emoji highlights ----------
+function captionFx() {
+  const hl = $("#highlight").checked;
+  return { highlight_keywords: hl, emoji: hl && $("#emoji").checked };
+}
+$("#highlight").addEventListener("change", () => {
+  const on = $("#highlight").checked;
+  $("#emoji").disabled = !on;
+  if (!on) $("#emoji").checked = false;
+});
 
 // ---------- caption style previews ----------
 const CAPTION_FONTS = {  // files served from /fonts, the same ones ffmpeg burns in
@@ -1194,6 +1211,7 @@ $("#form").addEventListener("submit", async (e) => {
       for (const [k, v] of Object.entries({
         clip_count: radio("count"), min_len, max_len,
         style: radio("style"), layout: $("#layout").value, aspect: radio("aspect"), hook: $("#hook").checked, trim_pauses: $("#trim").checked,
+        ...captionFx(),
         prompt: $("#prompt").value.trim(), start_time, end_time,
       })) if (v !== null && v !== undefined) fd.append(k, v);
       $("#go").disabled = true;
@@ -1221,6 +1239,7 @@ $("#form").addEventListener("submit", async (e) => {
       body: JSON.stringify({
         url: $("#url").value.trim(), clip_count: +radio("count"), min_len, max_len,
         style: radio("style"), layout: $("#layout").value, aspect: radio("aspect"), hook: $("#hook").checked, trim_pauses: $("#trim").checked,
+        ...captionFx(),
         prompt: $("#prompt").value.trim(), start_time, end_time,
       }),
     });
