@@ -5,12 +5,19 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from urllib.parse import urlparse
 
 import requests
 
 from . import config
 
 _READ_TIMEOUT = 1800  # a single chunk can take many minutes on a laptop CPU
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_loopback(url: str) -> bool:
+    """True when url points to a local loopback Ollama process."""
+    return (urlparse(url).hostname or "").lower() in _LOOPBACK_HOSTS
 
 
 def _reachable() -> bool:
@@ -21,9 +28,14 @@ def _reachable() -> bool:
 
 
 def ensure_running() -> None:
-    """Start the Ollama server if it isn't already up."""
+    """Start the local Ollama server if needed, or verify a remote one is reachable."""
     if _reachable():
         return
+    if not _is_loopback(config.OLLAMA_URL):
+        raise RuntimeError(
+            f"Couldn't reach Ollama at {config.OLLAMA_URL}. "
+            "Make sure the Ollama service is running and reachable."
+        )
     exe = config.OLLAMA_EXE
     if not exe or not os.path.exists(exe):
         raise RuntimeError("Ollama isn't running and OLLAMA_EXE doesn't point to ollama.exe.")
@@ -56,9 +68,14 @@ def chat_json(system: str, prompt: str, schema: dict) -> str:
         timeout=(5, _READ_TIMEOUT),
     )
     if res.status_code == 404:
+        if not _is_loopback(config.OLLAMA_URL):
+            raise RuntimeError(
+                f"Ollama at {config.OLLAMA_URL} doesn't have model {config.OLLAMA_MODEL}. "
+                f"Wait for the model download to finish or run: ollama pull {config.OLLAMA_MODEL}"
+            )
         raise RuntimeError(
-            f"Ollama is running but can't see {config.OLLAMA_MODEL}. It was probably started outside this app "
-            f"with a different models folder; close Ollama (Stop-Process -Name ollama) and try again."
+            f"Ollama is running but can't find {config.OLLAMA_MODEL}. Run `ollama pull {config.OLLAMA_MODEL}`, "
+            f"or if it was started outside this app with a different models folder, restart Ollama and try again."
         )
     res.raise_for_status()
     return res.json()["message"]["content"]

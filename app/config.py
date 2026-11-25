@@ -30,7 +30,19 @@ OUT_W, OUT_H = 1080, 1920
 MAX_VIDEO_HOURS = 4
 
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+def resolve_ollama_url() -> str:
+    """Return the normalized Ollama base URL from OLLAMA_URL or OLLAMA_HOST."""
+    raw = os.environ.get("OLLAMA_URL", "").strip() or os.environ.get("OLLAMA_HOST", "").strip()
+    if not raw:
+        return "http://127.0.0.1:11434"
+    if raw.startswith(":"):
+        raw = f"127.0.0.1{raw}"
+    if not raw.lower().startswith(("http://", "https://")):
+        raw = f"http://{raw}"
+    return raw.rstrip("/")
+
+
+OLLAMA_URL = resolve_ollama_url()
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b")
 # Explicit path from .env, else whatever "ollama" is on PATH (a normal install).
 OLLAMA_EXE = os.environ.get("OLLAMA_EXE", "") or shutil.which("ollama") or ""
@@ -50,7 +62,11 @@ def ai_provider() -> str | None:
         return "gemini"
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         return "claude"
-    if OLLAMA_EXE and os.path.exists(OLLAMA_EXE):
+    if (
+        (OLLAMA_EXE and os.path.exists(OLLAMA_EXE))
+        or os.environ.get("OLLAMA_URL", "").strip()
+        or os.environ.get("OLLAMA_HOST", "").strip()
+    ):
         return "ollama"
     return None
 

@@ -83,6 +83,16 @@ cd clipsmith
 
 Then open **http://127.0.0.1:8765**, paste a YouTube link (or drop in a video file) and click **Get clips**.
 
+## Run with Docker
+
+CPU-only, no API key or local Python setup needed:
+
+```
+docker compose up --build
+```
+
+Then open **http://127.0.0.1:8765**. On the first run, `ollama-init` automatically downloads the default AI model (`qwen3.5:4b`, about 3.3 GB); wait for that download to finish before starting your first AI job.
+
 ## Using it
 
 - **Clip settings:** pick the number of clips, the clip length and the aspect ratio (9:16, 1:1 or 16:9). Choose a caption style (each one shows a live preview; besides the original three there are Comic, Impact, Tall and a "Build-up" style where words appear one by one as they are spoken) and framing, and switch the opening hook text and pause/"uh" removal on or off.
